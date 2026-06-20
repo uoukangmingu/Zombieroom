@@ -1,0 +1,1 @@
+window.BHFPS_CONFIG = { SERVER_URL: '', FORCE_WEBSOCKET: false, SINGLEPLAYER_ONLY: true };
