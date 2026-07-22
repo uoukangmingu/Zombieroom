@@ -1,0 +1,35 @@
+{
+  "name": "BOXHEAD: BACKROOM LOW",
+  "short_name": "BOXHEAD",
+  "description": "저폴리 백룸 웨이브 생존 FPS",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0c0e12",
+  "theme_color": "#18140d",
+  "icons": [
+    {
+      "src": "assets/boxhead-icon-64.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/boxhead-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/boxhead-icon-256.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/boxhead-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

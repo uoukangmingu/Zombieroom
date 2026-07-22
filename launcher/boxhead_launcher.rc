@@ -1,0 +1,31 @@
+#include <windows.h>
+
+1 ICON "../BOXHEAD.ico"
+
+1 VERSIONINFO
+ FILEVERSION 0,62,0,0
+ PRODUCTVERSION 0,62,0,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Independent Game Project\0"
+      VALUE "FileDescription", "BOXHEAD: BACKROOM LOW Launcher\0"
+      VALUE "FileVersion", "0.62.0\0"
+      VALUE "InternalName", "BOXHEAD\0"
+      VALUE "OriginalFilename", "BOXHEAD.exe\0"
+      VALUE "ProductName", "BOXHEAD: BACKROOM LOW\0"
+      VALUE "ProductVersion", "0.62.0\0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END

@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="screen-orientation" content="landscape" />
+  <title>BOXHEAD: BACKROOM LOW</title>
+  <meta name="description" content="오프라인 1인용 저폴리 웨이브 생존 FPS" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="assets/boxhead-icon-64.png" sizes="64x64" type="image/png" />
+  <link rel="apple-touch-icon" href="assets/boxhead-icon-256.png" />
+  <link rel="stylesheet" href="style.css?v=62.0" />
+</head>
+<body>
+  <div id="game-root">
+    <canvas id="game"></canvas>
+
+    <section id="loading-screen" class="loading-screen show" aria-live="polite">
+      <div class="loading-backdrop"></div>
+      <div class="loading-content">
+        <img src="assets/boxhead-icon-256.png" alt="BOXHEAD 방호복 적" />
+        <p class="eyebrow">ENTERING THE BACKROOMS</p>
+        <h1>BOXHEAD</h1>
+        <span id="loading-status">격리 구역을 확인하는 중...</span>
+        <div class="loading-track"><i id="loading-bar"></i></div>
+        <small>BACKROOM LOW · v62.0</small>
+      </div>
+    </section>
+
+    <section id="start-screen" class="panel">
+      <div class="brand-row">
+        <div class="brand-mark"><img src="assets/boxhead-icon-256.png" alt="" /></div>
+        <div>
+          <p class="eyebrow">LOW-POLY SURVIVAL FPS</p>
+          <h1>BOXHEAD: BACKROOM LOW</h1>
+        </div>
+      </div>
+
+      <p class="lead">
+        Boxhead식 웨이브 생존, 무기 해금, 벽·지뢰 설치를
+        백룸풍 공간에서 혼자 살아남는 1인칭 저폴리 FPS. 인터넷 연결과 서버 설정 없이 바로 플레이할 수 있다.
+      </p>
+
+      <div class="game-mode-tabs" role="tablist" aria-label="게임 모드 선택">
+        <button id="survival-mode-button" class="mode-button active" type="button" role="tab" aria-selected="true">
+          <b>생존 모드</b><span>끝없이 이어지는 웨이브 런</span>
+        </button>
+        <button id="story-mode-button" class="mode-button" type="button" role="tab" aria-selected="false">
+          <b>스토리 모드</b><span>5개 챕터 격리 작전</span>
+        </button>
+      </div>
+
+      <div id="survival-menu-panel">
+        <div id="career-summary" class="career-summary" aria-live="polite">생존 기록을 불러오는 중...</div>
+        <button id="start-button" class="primary quick-start">빠른 시작</button>
+      </div>
+
+      <div id="story-menu-panel" class="story-menu-panel hidden">
+        <div id="story-progress-summary" class="story-progress-summary" aria-live="polite">스토리 진행 상황을 불러오는 중...</div>
+        <div id="story-chapter-list" class="story-chapter-list" aria-label="스토리 챕터 선택"></div>
+        <div id="story-selected-summary" class="story-selected-summary"></div>
+        <button id="story-start-button" class="primary quick-start" type="button">선택한 챕터 브리핑</button>
+      </div>
+
+      <details class="start-options">
+        <summary>맵·난이도·그래픽 상세 설정</summary>
+
+      <div class="settings-grid">
+        <label>
+          맵
+          <select id="map-select">
+            <option value="box">Big Boxy</option>
+            <option value="lane">Thin Line</option>
+            <option value="castle">4 Castles</option>
+            <option value="maze">Backrooms Maze XL</option>
+            <option value="abyss">Abyss Citadel / 극악 미로</option>
+          </select>
+        </label>
+        <label>
+          난이도
+          <select id="difficulty-select">
+            <option value="normal">Normal</option>
+            <option value="hard">Hard</option>
+            <option value="hell">Hell</option>
+          </select>
+        </label>
+        <label>
+          시작 웨이브 / 연습
+          <select id="start-wave-select">
+            <option value="1" selected>Wave 1 / 기본</option>
+            <option value="3">Wave 3 / 연습·기록 제외</option>
+            <option value="5">Wave 5 / 연습·기록 제외</option>
+            <option value="7">Wave 7 / 연습·기록 제외</option>
+            <option value="9">Wave 9 / 연습·기록 제외</option>
+            <option value="12">Wave 12 / 테스트·기록 제외</option>
+            <option value="15">Wave 15 / 테스트·기록 제외</option>
+          </select>
+        </label>
+        <label>
+          그래픽
+          <select id="quality-select">
+            <option value="auto" selected>자동 감지 / 권장</option>
+            <option value="ultra">초저사양 / 사무용 PC</option>
+            <option value="low">낮음 / 최적화</option>
+            <option value="mid">보통 / 균형</option>
+            <option value="high">높음 / 선명</option>
+          </select>
+        </label>
+        <label>
+          시야각 <b id="start-fov-label">72°</b>
+          <input id="start-fov-range" type="range" min="60" max="100" value="72" />
+        </label>
+        <label>
+          카메라 효과
+          <select id="start-camera-motion">
+            <option value="full">보통</option>
+            <option value="reduced">감소</option>
+            <option value="off">끄기</option>
+          </select>
+        </label>
+      </div>
+
+      <div id="performance-notice" class="performance-notice" role="status">
+        <b id="detected-quality">PC 성능 확인 중</b>
+        <span id="quality-description">자동 감지는 CPU·메모리·화면 크기를 보고 적절한 품질을 선택한다.</span>
+      </div>
+
+      <div class="mobile-menu-actions mobile-only">
+        <label class="mobile-input-mode-label">
+          모바일 입력 장치
+          <select id="mobile-input-mode-select">
+            <option value="auto">자동 감지</option>
+            <option value="touch">터치 조작</option>
+            <option value="keyboard">키보드·마우스</option>
+          </select>
+        </label>
+        <button id="mobile-settings-start" class="settings-button" type="button">모바일 조작 설정</button>
+      </div>
+
+      <div class="start-map-preview-title"><b>맵 미리보기</b><span>노란 삼각형: 시작 위치 · 붉은 점: 적 스폰 · 벽: 내부 구조</span></div>
+      <canvas id="start-map-preview" aria-label="map preview"></canvas>
+      </details>
+
+      <div class="menu-tool-bar">
+        <button id="fullscreen-start" class="settings-button" type="button">전체화면</button>
+        <button id="controls-settings-start" class="settings-button" type="button">키보드·마우스 설정</button>
+        <button id="save-export" class="settings-button" type="button">저장 백업</button>
+        <button id="save-import" class="settings-button" type="button">저장 복원</button>
+        <input id="save-import-file" type="file" accept="application/json,.json" hidden />
+      </div>
+
+      <div class="help-card">
+        <b>조작</b>
+        <span>WASD 이동 · Space 점프 · 마우스 시점 · 좌클릭 발사 · 우클릭 정조준 · 마우스 휠/1~8 무기 · R 재장전 · E 회복키트 · Shift 달리기 · ESC 설정/일시정지</span>
+      </div>
+    </section>
+
+    <section id="pause-screen" class="panel">
+      <h2>설정 / 일시정지</h2>
+      <p>ESC로 열고 닫을 수 있다. 설정 변경 후 계속하기를 누르면 마우스가 다시 잠긴다.</p>
+      <div class="pause-settings">
+        <label>
+          그래픽 품질
+          <select id="pause-quality-select">
+            <option value="auto">자동 감지 / 권장</option>
+            <option value="ultra">초저사양 / 사무용 PC</option>
+            <option value="low">낮음 / 최적화</option>
+            <option value="mid">보통 / 균형</option>
+            <option value="high">높음 / 선명</option>
+          </select>
+        </label>
+        <label>
+          전체 음량 <b id="master-volume-label">100%</b>
+          <input id="master-volume-range" type="range" min="0" max="100" value="100" />
+        </label>
+        <label>
+          효과음 <b id="sfx-volume-label">100%</b>
+          <input id="sfx-volume-range" type="range" min="0" max="100" value="100" />
+        </label>
+        <label>
+          배경음 / BGM <b id="bgm-volume-label">100%</b>
+          <input id="bgm-volume-range" type="range" min="0" max="100" value="100" />
+        </label>
+        <label>
+          입력 장치
+          <select id="pause-input-mode-select">
+            <option value="auto">자동 감지</option>
+            <option value="touch">터치 조작</option>
+            <option value="keyboard">키보드·마우스</option>
+          </select>
+        </label>
+        <label>
+          마우스 감도 <b id="pause-mouse-sensitivity-label">100%</b>
+          <input id="pause-mouse-sensitivity" type="range" min="35" max="200" value="100" />
+        </label>
+        <label>
+          시야각 <b id="pause-fov-label">72°</b>
+          <input id="pause-fov-range" type="range" min="60" max="100" value="72" />
+        </label>
+        <label>
+          카메라 흔들림
+          <select id="pause-camera-motion">
+            <option value="full">보통</option>
+            <option value="reduced">감소</option>
+            <option value="off">끄기</option>
+          </select>
+        </label>
+        <label>
+          조명 깜빡임
+          <select id="pause-flicker">
+            <option value="on">켜기</option>
+            <option value="off">끄기</option>
+          </select>
+        </label>
+        <label>
+          고대비 HUD·미니맵
+          <select id="pause-high-contrast">
+            <option value="off">끄기</option>
+            <option value="on">켜기</option>
+          </select>
+        </label>
+      </div>
+      <div class="settings-action-bar pause-action-bar">
+        <button id="fullscreen-pause" class="settings-button" type="button">전체화면</button>
+        <button id="mobile-settings-pause" class="settings-button mobile-only" type="button">모바일 조작 설정</button>
+        <button id="controls-settings-pause" class="settings-button" type="button">키보드·마우스 설정</button>
+        <button id="resume-button" class="settings-button accent" type="button">계속하기</button>
+        <button id="main-menu-button" class="settings-button danger" type="button">게임 종료 후 메인으로</button>
+      </div>
+    </section>
+
+    <section id="story-screen" class="panel story-screen">
+      <p id="story-screen-eyebrow" class="eyebrow">STORY BRIEFING</p>
+      <h2 id="story-screen-title">격리 작전</h2>
+      <p id="story-screen-copy" class="story-screen-copy"></p>
+      <div id="story-screen-objectives" class="story-screen-objectives"></div>
+      <div id="story-screen-status" class="story-screen-status"></div>
+      <div class="story-screen-actions">
+        <button id="story-primary-button" class="settings-button accent" type="button">임무 시작</button>
+        <button id="story-secondary-button" class="settings-button" type="button">챕터 선택으로</button>
+      </div>
+    </section>
+
+    <section id="game-over-screen" class="panel">
+      <p class="eyebrow">RUN ENDED</p>
+      <h2>게임 오버</h2>
+      <div id="final-stats" class="final-stats"></div>
+      <div class="game-over-actions">
+        <button id="restart-button" class="settings-button accent">다시 시작</button>
+        <button id="game-over-main-button" class="settings-button">메인으로</button>
+      </div>
+    </section>
+
+    <section id="reward-screen" class="panel reward-panel">
+      <p class="eyebrow">WAVE REWARD</p>
+      <h2 id="reward-title">Wave Clear</h2>
+      <p id="reward-subtitle">보상 하나를 선택하면 다음 웨이브 준비 시간이 시작된다.</p>
+      <div id="reward-choices" class="reward-choices"></div>
+      <div class="reward-action-bar">
+        <button id="reward-confirm" class="settings-button accent" type="button" disabled>업그레이드 선택 후 적용</button>
+        <button id="reward-skip" class="settings-button" type="button">보상 없이 진행</button>
+        <button id="reward-extract" class="settings-button extract" type="button" hidden>런 종료 · 기록 확정</button>
+      </div>
+    </section>
+
+    <div id="hud" class="hud hidden">
+      <div class="top-left">
+        <div class="meter-block">
+          <div class="meter-label"><span>HP</span><b id="hp-text">100</b></div>
+          <div class="meter"><i id="hp-bar"></i></div>
+        </div>
+        <div class="meter-block">
+          <div class="meter-label"><span>스태미너</span><b id="stamina-text">100</b></div>
+          <div class="meter stamina"><i id="stamina-bar"></i></div>
+        </div>
+        <div class="meter-block">
+          <div class="meter-label"><span id="heal-key-label">회복키트 / E</span><b id="medkit-text">0/100</b></div>
+          <div class="meter medkit"><i id="medkit-bar"></i></div>
+        </div>
+      </div>
+
+      <div class="top-center">
+        <div class="wave-box">
+          <b id="wave-text">Wave 1</b>
+          <span id="alive-text">0 left</span>
+          <span id="objective-text" class="objective-text"></span>
+        </div>
+      </div>
+
+      <div class="top-right">
+        <div id="score-text" class="score">0</div>
+        <div id="fps-text" class="fps">FPS --</div>
+        <div id="quality-text" class="fps quality-state">AUTO</div>
+      </div>
+
+      <div id="crosshair" class="crosshair"><i></i><i></i></div>
+      <div id="center-alert" class="center-alert"></div>
+      <div id="headshot-indicator" class="headshot-indicator">HEADSHOT</div>
+      <div id="low-health-warning" class="low-health-warning">LOW HP</div>
+
+      <div class="bottom-left">
+        <div id="minimap" class="minimap"></div>
+      </div>
+
+      <div class="bottom-center">
+        <div id="weapon-bar" class="weapon-bar"></div>
+        <div id="ammo-text" class="ammo">PISTOL ∞</div>
+      </div>
+
+      <div id="story-target-marker" class="story-target-marker" aria-hidden="true">
+        <em id="story-target-direction"></em><i id="story-target-icon">◆</i><b id="story-target-label">목표</b><span id="story-target-distance">0m</span>
+      </div>
+      <div id="story-dialogue" class="story-dialogue" aria-live="polite" aria-atomic="true">
+        <div class="story-dialogue-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="story-dialogue-copy"><b id="story-dialogue-speaker">격리국 관제</b><p id="story-dialogue-text"></p></div>
+      </div>
+      <div id="story-cinematic" class="story-cinematic" aria-hidden="true">
+        <i class="story-cinematic-top"></i><i class="story-cinematic-bottom"></i>
+        <div><b id="story-cinematic-title"></b><span id="story-cinematic-copy"></span></div>
+      </div>
+      <div id="toast" class="toast"></div>
+      <div id="damage-vignette" class="damage-vignette"></div>
+    </div>
+
+    <div id="mobile-controls" class="mobile-controls" aria-hidden="true">
+      <div id="mobile-look-zone" class="mobile-look-zone" aria-label="화면 시점 조작 영역"></div>
+      <div id="mobile-joystick" class="mobile-control mobile-joystick" data-control="joystick">
+        <i id="mobile-joystick-knob"></i><span id="mobile-sprint-state">위로 밀면 자동 달리기</span>
+      </div>
+      <button class="mobile-control mobile-action action-fire action-fire-left" data-control="fireLeft" type="button">좌측 발사</button>
+      <button class="mobile-control mobile-action action-fire" data-control="fire" type="button">발사</button>
+      <button class="mobile-control mobile-action action-ads-fire" data-control="adsFire" type="button">ADS 발사</button>
+      <button class="mobile-control mobile-action action-aim" data-control="aim" type="button">조준</button>
+      <button class="mobile-control mobile-action action-jump" data-control="jump" type="button">점프</button>
+      <button class="mobile-control mobile-action action-sprint" data-control="sprint" type="button">달리기</button>
+      <button class="mobile-control mobile-action action-reload" data-control="reload" type="button">재장전</button>
+      <button class="mobile-control mobile-action action-heal" data-control="heal" type="button">회복</button>
+      <button class="mobile-control mobile-action action-weapon" data-control="weapon" type="button">무기</button>
+      <button class="mobile-control mobile-action action-pause" data-control="pause" type="button">Ⅱ</button>
+    </div>
+
+    <section id="mobile-settings-screen" class="panel mobile-settings-panel">
+      <p class="eyebrow">MOBILE CONTROLS</p>
+      <h2>모바일 조작 설정</h2>
+      <p class="mobile-settings-help">이동 스틱을 위로 끝까지 밀면 자동 달리기가 켜집니다. 좌·우 발사와 ADS 발사는 누른 채 드래그해 조준할 수 있으며, 모든 버튼은 위치·크기·투명도를 바꿀 수 있습니다.</p>
+      <div class="mobile-options-grid">
+        <label>
+          입력 장치
+          <select id="mobile-settings-input-mode-select">
+            <option value="auto">자동 감지</option>
+            <option value="touch">터치 조작</option>
+            <option value="keyboard">키보드·마우스</option>
+          </select>
+        </label>
+        <label>
+          자동 달리기
+          <select id="mobile-auto-sprint">
+            <option value="on">스틱을 위로 밀면 자동</option>
+            <option value="off">달리기 버튼만 사용</option>
+          </select>
+        </label>
+        <label>
+          조준 버튼 방식
+          <select id="mobile-aim-mode">
+            <option value="toggle">한 번 눌러 유지</option>
+            <option value="hold">누르는 동안만</option>
+          </select>
+        </label>
+        <label class="mobile-sensitivity-label">
+          시점 감도 <b id="mobile-sensitivity-label">100%</b>
+          <input id="mobile-sensitivity" type="range" min="45" max="180" value="100" />
+        </label>
+        <label>
+          터치키 크기 <b id="mobile-scale-label">100%</b>
+          <input id="mobile-scale" type="range" min="75" max="135" value="100" />
+        </label>
+        <label>
+          터치키 투명도 <b id="mobile-opacity-label">72%</b>
+          <input id="mobile-opacity" type="range" min="35" max="100" value="72" />
+        </label>
+      </div>
+      <div id="mobile-key-list" class="mobile-key-list"></div>
+      <div class="settings-action-bar mobile-settings-actions">
+        <button id="fullscreen-mobile" class="settings-button" type="button">전체화면</button>
+        <button id="mobile-layout-edit" class="settings-button" type="button">터치키 위치 편집</button>
+        <button id="mobile-layout-reset" class="settings-button" type="button">기본값 복원</button>
+        <button id="mobile-settings-close" class="settings-button accent" type="button">저장하고 완료</button>
+      </div>
+    </section>
+
+    <section id="controls-settings-screen" class="panel controls-settings-panel">
+      <p class="eyebrow">KEYBOARD &amp; MOUSE</p>
+      <h2>키보드·마우스 설정</h2>
+      <p class="controls-settings-help">변경할 항목을 누른 뒤 원하는 키 또는 마우스 버튼을 입력하세요. 같은 키를 지정하면 두 항목의 키가 서로 교환됩니다.</p>
+      <div class="controls-settings-top">
+        <label>
+          입력 장치
+          <select id="controls-input-mode-select">
+            <option value="auto">자동 감지</option>
+            <option value="touch">터치 조작</option>
+            <option value="keyboard">키보드·마우스</option>
+          </select>
+        </label>
+        <label>
+          마우스 감도 <b id="controls-mouse-sensitivity-label">100%</b>
+          <input id="controls-mouse-sensitivity" type="range" min="35" max="200" value="100" />
+        </label>
+      </div>
+      <div id="key-binding-list" class="key-binding-list"></div>
+      <div id="binding-capture-notice" class="binding-capture-notice">변경할 조작을 선택하세요.</div>
+      <div class="settings-action-bar controls-settings-actions">
+        <button id="fullscreen-controls" class="settings-button" type="button">전체화면</button>
+        <button id="controls-reset" class="settings-button" type="button">기본 키 복원</button>
+        <button id="controls-settings-close" class="settings-button accent" type="button">저장하고 완료</button>
+      </div>
+    </section>
+
+    <div id="mobile-layout-toolbar" class="mobile-layout-toolbar">
+      <b>터치키 배치 편집</b>
+      <span>원하는 버튼을 끌어서 이동하세요.</span>
+      <button id="mobile-layout-done" class="settings-button accent" type="button">저장하고 완료</button>
+    </div>
+
+    <div id="orientation-overlay" class="orientation-overlay" role="status">
+      <div class="rotate-phone-icon">↻</div>
+      <b>휴대폰을 가로로 돌려주세요</b>
+      <span>게임은 모바일 가로 화면에 맞춰 실행됩니다.</span>
+    </div>
+
+    <noscript>이 게임은 JavaScript가 필요합니다.</noscript>
+  </div>
+
+  <script defer src="config.js"></script>
+  <script defer src="/socket.io/socket.io.js"></script>
+  <script defer src="game.bundle.js?v=62.0"></script>
+  <script defer src="v59.patch.js?v=62.0"></script>
+  <script defer src="v60.patch.js?v=62.0"></script>
+  <script defer src="v61.patch.js?v=62.0"></script>
+  <script defer src="v62.patch.js?v=62.0"></script>
+  <script>
+    (() => {
+      const BUILD = '62.0';
+      window.BOXHEAD_BUILD = BUILD;
+      if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
+      const reloadKey = `boxhead-controller-reload-${BUILD}`;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (sessionStorage.getItem(reloadKey)) return;
+        sessionStorage.setItem(reloadKey, '1');
+        const next = new URL(location.href);
+        next.searchParams.set('build', BUILD);
+        location.replace(next.href);
+      });
+      addEventListener('load', async () => {
+        try {
+          const registration = await navigator.serviceWorker.register(`./sw.js?build=${BUILD}`, { updateViaCache: 'none' });
+          const activateWaiting = () => registration.waiting?.postMessage({ type:'SKIP_WAITING' });
+          activateWaiting();
+          registration.addEventListener('updatefound', () => {
+            const worker = registration.installing;
+            worker?.addEventListener('statechange', () => {
+              if (worker.state === 'installed' && navigator.serviceWorker.controller) activateWaiting();
+            });
+          });
+          await registration.update();
+          const version = await fetch(`./version.json?t=${Date.now()}`, { cache:'no-store' }).then(r => r.ok ? r.json() : null);
+          if (version?.build && version.build !== BUILD) {
+            const next = new URL(location.href);
+            next.searchParams.set('build', version.build);
+            location.replace(next.href);
+          }
+        } catch (_) {}
+      });
+    })();
+  </script>
+</body>
+</html>
