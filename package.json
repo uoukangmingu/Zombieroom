@@ -1,0 +1,23 @@
+{
+  "name": "boxhead-backroom-low-offline",
+  "version": "0.62.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --check client/game.js && node --check client/v59.patch.js && node --check client/v60.patch.js && node --check client/v61.patch.js && node --check client/v62.patch.js && node --check client/sw.js && node tests/navigation.test.mjs && node tests/mobile-controls.test.mjs && node tests/input-settings.test.mjs && node tests/systems.test.mjs && node tests/story-mode.test.mjs && node tests/story-target-direction.test.mjs && node tests/story-coherence-v59.test.mjs && node tests/v59-patch-runtime.test.mjs && node tests/story-realism-v60.test.mjs && node tests/v60-patch-runtime.test.mjs && node tests/story-coherence-v61.test.mjs && node tests/v61-patch-runtime.test.mjs && node tests/story-cinematic-v62.test.mjs && node tests/v62-patch-runtime.test.mjs && node scripts/runtime-test.mjs && npm run build",
+    "start": "node server/server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3",
+    "three": "0.165.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.6",
+    "jsdom": "^29.1.1"
+  }
+}
