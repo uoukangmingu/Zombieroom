@@ -1,7 +1,7 @@
 {
-  "name": "BOXHEAD: BACKROOM LOW",
+  "name": "BOXHEAD · BACKROOM CO-OP",
   "short_name": "BOXHEAD",
-  "description": "저폴리 백룸 웨이브 생존 FPS",
+  "description": "싱글플레이와 2인 온라인 협동 생존 FPS",
   "start_url": "./",
   "scope": "./",
   "display": "fullscreen",

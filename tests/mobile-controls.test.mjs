@@ -20,7 +20,7 @@ for (const id of [
   'mobile-layout-toolbar', 'mobile-layout-done', 'orientation-overlay', 'reward-confirm'
 ]) assert.ok(ids.includes(id), `모바일 UI 요소 #${id} 누락`);
 
-for (const control of ['fireLeft','fire','adsFire','aim','jump','sprint','reload','heal','weapon','pause']) {
+for (const control of ['fireLeft','fire','adsFire','aim','jump','sprint','reload','heal','weapon','pause','interact']) {
   assert.match(html, new RegExp(`data-control="${control}"`), `${control} 터치키 누락`);
 }
 
@@ -38,7 +38,7 @@ assert.match(game, /this\.mobile\?\.update\(dt\);[\s\S]*this\.handleInput\(dt\);
 assert.match(game, /dx \* this\.sensitivity \* 1\.06, dy \* this\.sensitivity \* 1\.06/, '발사 드래그 양축 감도 보강 누락');
 assert.match(game, /held\('fire'\) \|\| held\('adsFire'\)/, 'ADS 동시 발사 처리 누락');
 assert.match(game, /시점 변화는 실제 드래그 거리만 사용한다/, '발사 드래그가 실제 이동량만 사용해야 함');
-assert.match(game, /suppressClick = gesture\.dragged \|\| scrolled > 2/, '생존·스토리 시작 버튼 스크롤 오입력 방지 누락');
+assert.match(game, /suppressClick = gesture\.dragged \|\| scrolled > 2/, '싱글·협동 시작 버튼 스크롤 오입력 방지 누락');
 assert.match(css, /body\.mobile-device \.panel \{[\s\S]*touch-action: pan-y/, '모바일 메뉴 세로 스크롤 허용 규칙 누락');
 assert.match(css, /--mobile-scale/, '터치키 크기 조절 스타일 누락');
 assert.match(css, /--mobile-opacity/, '터치키 투명도 조절 스타일 누락');

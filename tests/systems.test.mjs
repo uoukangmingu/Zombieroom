@@ -48,21 +48,11 @@ function extractMethod(name) {
   assert.equal(game.player.vx, 0, '벽에 막힌 이동축 속도는 0이어야 함');
 }
 
-// 특수 미션은 6웨이브마다 하나만, 고정 순서로 순환해야 한다.
-{
-  const method = extractMethod('getMissionForWave');
-  const Harness = Function('clamp', `return class Harness { ${method} }`)(clamp);
-  const game = new Harness();
-  const expected = ['survive', 'rush', 'core', 'blackout', 'survive'];
-  assert.deepEqual([6,12,18,24,30].map(w => game.getMissionForWave(w).type), expected);
-  for (const wave of [7,11,13,23]) assert.equal(game.getMissionForWave(wave).type, 'normal');
-}
-
 for (const id of [
   'career-summary','start-fov-range','pause-fov-range','pause-camera-motion','pause-flicker',
   'pause-high-contrast','save-export','save-import','reward-extract','game-over-main-button',
-  'survival-mode-button','story-mode-button','story-start-button','story-screen','story-chapter-list',
-  'story-target-marker','story-dialogue','story-cinematic'
+  'single-mode-button','coop-mode-button','create-room-button','join-room-button','ready-button',
+  'mission-title','mission-progress-bar','objective-marker','connection-overlay'
 ]) assert.match(html, new RegExp(`id="${id}"`), `#${id} UI 누락`);
 
 assert.match(source, /findDeterministicSafePoint\(/, '결정론적 안전 스폰 폴백 누락');
@@ -78,4 +68,5 @@ assert.match(css, /body\.high-contrast/, '고대비 HUD 스타일 누락');
 assert.match(sw, /boxhead-backroom-low-v\$\{BUILD\}-network-first|boxhead-backroom-low-v59/, 'v59 네트워크 우선 캐시 누락');
 for (const asset of ['index.html','style.css','game.bundle.js','manifest.webmanifest']) assert.match(sw, new RegExp(asset.replace('.', '\\.')), `서비스 워커 캐시 자산 누락: ${asset}`);
 
-console.log('v59 systems regression tests: passed');
+assert.doesNotMatch(source + html, /story-mode|story-screen|startStoryChapter/, '삭제한 캠페인은 노출되면 안 됨');
+console.log('survival and co-op systems regression tests: passed');

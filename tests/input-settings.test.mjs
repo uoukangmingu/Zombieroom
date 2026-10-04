@@ -96,7 +96,7 @@ assert.match(html, /id="loading-screen" class="loading-screen show"/, '게임 �
 assert.doesNotMatch(html, /id="start-screen" class="panel show"/, '메인 메뉴가 로딩 화면보다 먼저 보이면 안 됨');
 assert.match(css, /\.loading-screen\.show/, '로딩 화면 표시 스타일 누락');
 assert.match(source, /requestReturnToMainMenu\(\)/, '메인 메뉴 복귀 로직 누락');
-assert.match(source, /window\.location\.reload\(\)/, '메인 복귀 시 최초 실행 상태 재시작 누락');
+assert.match(source, /this\.resetToMainMenuState\(\)/, '메인 복귀 상태 초기화 누락');
 assert.match(source, /toggleFullscreen\(\)/, '전체화면 전환 로직 누락');
 assert.match(source, /const canRecover = p\.grounded && !wantsSprint/, '정지 중 스태미너 회복 조건 누락');
 assert.match(source, /stationary \? 1\.12 : 1/, '정지 시 걷기보다 빠른 스태미너 회복 누락');

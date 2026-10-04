@@ -3,11 +3,11 @@ services:
     name: boxhead-lowpoly-fps-server
     env: node
     plan: free
-    buildCommand: npm install
+    buildCommand: npm ci --omit=dev
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       - key: NODE_VERSION
-        value: 20
+        value: 22
       - key: PORT
         value: 10000

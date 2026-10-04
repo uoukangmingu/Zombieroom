@@ -1,18 +1,20 @@
+import {NetAdapter} from './network.js';
+import {MAPS,MAP_KEYS as SURVIVAL_MAP_KEYS,DIFFICULTY,WEAPON_DEFS,enemyStats as getEnemyStats,pickEnemyType} from '../shared/arena.js';
+import {getMission,createMissionState,tickMission,missionProgress,missionHint,waveSpawnCount,MISSION_CATALOG} from '../shared/missions.js';
 import * as THREE from 'three';
 
-const GAME_BUILD = '62.0';
+const GAME_BUILD = '1.0.0';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
 
 const UI = {
   loading: $('loading-screen'), loadingStatus: $('loading-status'), loadingBar: $('loading-bar'),
-  start: $('start-screen'), pause: $('pause-screen'), over: $('game-over-screen'), storyScreen: $('story-screen'),
-  hud: $('hud'), startBtn: $('start-button'), storyStartBtn: $('story-start-button'), resumeBtn: $('resume-button'), restartBtn: $('restart-button'),
-  survivalModeBtn: $('survival-mode-button'), storyModeBtn: $('story-mode-button'), survivalMenuPanel: $('survival-menu-panel'), storyMenuPanel: $('story-menu-panel'),
-  storyProgressSummary: $('story-progress-summary'), storyChapterList: $('story-chapter-list'), storySelectedSummary: $('story-selected-summary'),
-  storyScreenEyebrow: $('story-screen-eyebrow'), storyScreenTitle: $('story-screen-title'), storyScreenCopy: $('story-screen-copy'), storyScreenObjectives: $('story-screen-objectives'), storyScreenStatus: $('story-screen-status'),
-  storyPrimaryBtn: $('story-primary-button'), storySecondaryBtn: $('story-secondary-button'),
+  start: $('start-screen'), pause: $('pause-screen'), over: $('game-over-screen'), 
+  hud: $('hud'), startBtn: $('start-button'),  resumeBtn: $('resume-button'), restartBtn: $('restart-button'),
+  survivalModeBtn: $('survival-mode-button'),  survivalMenuPanel: $('survival-menu-panel'), 
+
+  pingText:$('ping-text'), missionCard:$('mission-card'), missionTitle:$('mission-title'), missionBar:$('mission-progress-bar'), missionBonus:$('mission-bonus'), missionMarker:$('objective-marker'), missionMarkerLabel:$('objective-marker-label'), squadStatus:$('squad-status'), prepReady:$('prep-ready'), connectionOverlay:$('connection-overlay'), connectionTitle:$('connection-title'), connectionCopy:$('connection-copy'), levelGuide:$('level-guide'), lobbyPlayers:$('lobby-players'), leaveRoomBtn:$('leave-room-button'), copyInviteBtn:$('copy-invite-button'),
   mainMenuBtn: $('main-menu-button'), controlsSettingsStart: $('controls-settings-start'), controlsSettingsPause: $('controls-settings-pause'),
   fullscreenStart: $('fullscreen-start'), fullscreenPause: $('fullscreen-pause'), fullscreenControls: $('fullscreen-controls'), fullscreenMobile: $('fullscreen-mobile'),
   singleModeBtn: $('single-mode-button'), coopModeBtn: $('coop-mode-button'), playMode: $('play-mode-select'), multiplayerPanel: $('multiplayer-panel'),
@@ -42,16 +44,13 @@ const UI = {
   controlsSettings: $('controls-settings-screen'), controlsSettingsClose: $('controls-settings-close'), controlsReset: $('controls-reset'),
   keyBindingList: $('key-binding-list'), bindingCaptureNotice: $('binding-capture-notice'),
   orientationOverlay: $('orientation-overlay'),
-  storyTargetMarker: $('story-target-marker'), storyTargetDirection: $('story-target-direction'), storyTargetIcon: $('story-target-icon'), storyTargetLabel: $('story-target-label'), storyTargetDistance: $('story-target-distance'),
-  storyDialogue: $('story-dialogue'), storyDialogueSpeaker: $('story-dialogue-speaker'), storyDialogueText: $('story-dialogue-text'),
-  storyCinematic: $('story-cinematic'), storyCinematicTitle: $('story-cinematic-title'), storyCinematicCopy: $('story-cinematic-copy')
-};
+
+    };
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 const rand = (min, max) => min + Math.random() * (max - min);
 const dist2 = (ax, az, bx, bz) => (ax - bx) * (ax - bx) + (az - bz) * (az - bz);
 const now = () => performance.now() / 1000;
-const resolveStoryTargetScreenSide = (dx, dz, yaw) => (dx * Math.cos(yaw) + dz * -Math.sin(yaw) < 0 ? 'left' : 'right');
 
 const isMobileDevice = () => {
   const coarse = !!window.matchMedia?.('(pointer: coarse)').matches;
@@ -63,7 +62,7 @@ const isMobileDevice = () => {
 const DEFAULT_BINDINGS = Object.freeze({
   forward: 'KeyW', backward: 'KeyS', left: 'KeyA', right: 'KeyD',
   jump: 'Space', sprint: 'ShiftLeft', fire: 'Mouse0', aim: 'Mouse2',
-  reload: 'KeyR', heal: 'KeyE',
+  reload: 'KeyR', heal: 'KeyE', interact: 'KeyF',
   weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3', weapon4: 'Digit4',
   weapon5: 'Digit5', weapon6: 'Digit6', weapon7: 'Digit7', weapon8: 'Digit8'
 });
@@ -71,7 +70,7 @@ const DEFAULT_BINDINGS = Object.freeze({
 const BINDING_ACTIONS = [
   ['forward','앞으로 이동'], ['backward','뒤로 이동'], ['left','왼쪽 이동'], ['right','오른쪽 이동'],
   ['jump','점프'], ['sprint','달리기'], ['fire','발사'], ['aim','정조준'],
-  ['reload','재장전'], ['heal','회복·아군 지원'],
+  ['reload','재장전'], ['heal','회복·아군 지원'], ['interact','목표 상호작용'],
   ['weapon1','무기 1'], ['weapon2','무기 2'], ['weapon3','무기 3'], ['weapon4','무기 4'],
   ['weapon5','무기 5'], ['weapon6','무기 6'], ['weapon7','무기 7'], ['weapon8','무기 8']
 ];
@@ -115,15 +114,9 @@ const COLORS = {
   lightPanel: 0xdbe2a5, itemBox: 0xd3b34f, itemBand: 0x2a3340, itemHealth: 0x49d17d
 };
 
-const DIFFICULTY = {
-  normal: { enemyHp: 1, enemySpeed: 1, enemyDamage: 1, spawn: 1 },
-  hard: { enemyHp: 1.22, enemySpeed: 1.10, enemyDamage: 1.25, spawn: 1.18 },
-  hell: { enemyHp: 1.45, enemySpeed: 1.18, enemyDamage: 1.45, spawn: 1.34 }
-};
-
 const QUALITY = {
   // 초저사양은 사무용 내장 그래픽을 목표로 GPU/DOM/이펙트 갱신량을 함께 줄인다.
-  ultra: { label: '초저사양', pixelRatio: .44, minPixelRatio: .30, fogFar: 38, fx: .04, shadows: false, shadowMap: 0, lightCount: 0, targetFps: 30, maxFx: 8, maxEnemies: 24, detailStep: 0, stainCount: 0, hudHz: 8, minimapHz: 0, aiHz: 12, overlapHz: 8, simpleModels: true, dynamicResolution: true },
+  ultra: { label: '초저사양', pixelRatio: .44, minPixelRatio: .30, fogFar: 38, fx: .04, shadows: false, shadowMap: 0, lightCount: 0, targetFps: 30, maxFx: 8, maxEnemies: 24, detailStep: 0, stainCount: 0, hudHz: 8, minimapHz: 4, aiHz: 12, overlapHz: 8, simpleModels: true, dynamicResolution: true },
   low: { label: '낮음', pixelRatio: .90, minPixelRatio: .66, fogFar: 64, fx: .58, shadows: false, shadowMap: 0, lightCount: 3, targetFps: 45, maxFx: 72, maxEnemies: 58, detailStep: 6, stainCount: 10, hudHz: 15, minimapHz: 6, dynamicResolution: true },
   mid: { label: '보통', pixelRatio: 1.15, minPixelRatio: .85, fogFar: 86, fx: 1.0, shadows: true, shadowMap: 768, lightCount: 7, targetFps: 60, maxFx: 130, maxEnemies: 72, detailStep: 4, stainCount: 20, hudHz: 30, minimapHz: 12, dynamicResolution: false },
   high: { label: '높음', pixelRatio: 1.5, minPixelRatio: 1.0, fogFar: 108, fx: 1.18, shadows: true, shadowMap: 1536, lightCount: 11, targetFps: 60, maxFx: 190, maxEnemies: 72, detailStep: 4, stainCount: 32, hudHz: 60, minimapHz: 20, dynamicResolution: false }
@@ -151,656 +144,6 @@ function describeHardware(key) {
   if (memory) parts.push(`메모리 약 ${memory}GB`);
   parts.push(`${window.innerWidth}×${window.innerHeight}`);
   return `${parts.join(' · ')} 기준 ${QUALITY[key]?.label || '보통'} 모드`;
-}
-
-const WEAPON_DEFS = [
-  { id: 'pistol', slot: 1, name: 'PISTOL', unlockWave: 1, ammoMax: Infinity, magSize: 12, reloadTime: .92, cooldown: .32, damage: 24, range: 42, pellets: 1, spread: 0.004, recoil: .020, type: 'hitscan' },
-  { id: 'smg', slot: 2, name: 'SMG', unlockWave: 2, ammoMax: 160, magSize: 30, reloadTime: 1.28, cooldown: .08, damage: 12, range: 34, pellets: 1, spread: 0.018, recoil: .012, type: 'hitscan' },
-  { id: 'shotgun', slot: 3, name: 'SHOTGUN', unlockWave: 3, ammoMax: 48, magSize: 6, reloadTime: 1.55, cooldown: .62, damage: 13, range: 24, pellets: 8, spread: 0.095, recoil: .060, type: 'hitscan' },
-  { id: 'grenade', slot: 4, name: 'GRENADE', unlockWave: 4, ammoMax: 20, magSize: 1, reloadTime: 1.05, cooldown: .72, damage: 92, range: 22, radius: 5.2, recoil: .035, type: 'grenade' },
-  { id: 'barrel', slot: 5, name: 'BARREL', unlockWave: 5, ammoMax: 12, cooldown: .45, damage: 130, radius: 6.3, type: 'barrel' },
-  { id: 'wall', slot: 6, name: 'WALL', unlockWave: 6, ammoMax: 18, cooldown: .28, type: 'wall' },
-  { id: 'rocket', slot: 7, name: 'ROCKET', unlockWave: 7, ammoMax: 18, magSize: 1, reloadTime: 1.82, cooldown: .86, damage: 145, radius: 6.8, speed: 26, recoil: .080, type: 'rocket' },
-  { id: 'railgun', slot: 8, name: 'RAIL', unlockWave: 9, ammoMax: 28, magSize: 3, reloadTime: 1.70, cooldown: .75, damage: 105, range: 70, pellets: 1, spread: 0, pierce: 8, recoil: .045, type: 'rail' }
-];
-
-function buildAbyssCitadelObstacles() {
-  // 9×9 셀의 결정론적 미로. 완전 미로를 만든 뒤 일부 벽을 열어 순환로를 추가한다.
-  // 같은 좌표의 연속 벽은 하나로 합쳐 복잡도에 비해 draw call이 과도하게 늘지 않는다.
-  const count = 9;
-  const cell = 12;
-  const half = count * cell / 2;
-  const wall = 2;
-  const visited = new Uint8Array(count * count);
-  const passages = new Set();
-  const edgeKey = (a, b) => a < b ? `${a}:${b}` : `${b}:${a}`;
-  let seed = 0x4b1d5e7f;
-  const random = () => {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return seed / 4294967296;
-  };
-  const stack = [Math.floor(count * count / 2)];
-  visited[stack[0]] = 1;
-  while (stack.length) {
-    const current = stack[stack.length - 1];
-    const x = current % count, z = Math.floor(current / count);
-    const choices = [];
-    if (x > 0 && !visited[current - 1]) choices.push(current - 1);
-    if (x + 1 < count && !visited[current + 1]) choices.push(current + 1);
-    if (z > 0 && !visited[current - count]) choices.push(current - count);
-    if (z + 1 < count && !visited[current + count]) choices.push(current + count);
-    if (!choices.length) { stack.pop(); continue; }
-    const next = choices[Math.floor(random() * choices.length)];
-    passages.add(edgeKey(current, next));
-    visited[next] = 1;
-    stack.push(next);
-  }
-
-  // 완전 미로에 12개의 지름길을 열어 적과 플레이어 모두 여러 우회 선택지를 갖게 한다.
-  const closedEdges = [];
-  for (let z = 0; z < count; z++) {
-    for (let x = 0; x < count; x++) {
-      const a = z * count + x;
-      if (x + 1 < count && !passages.has(edgeKey(a, a + 1))) closedEdges.push(edgeKey(a, a + 1));
-      if (z + 1 < count && !passages.has(edgeKey(a, a + count))) closedEdges.push(edgeKey(a, a + count));
-    }
-  }
-  for (let i = 0; i < 12 && closedEdges.length; i++) {
-    const pick = Math.floor(random() * closedEdges.length);
-    passages.add(closedEdges.splice(pick, 1)[0]);
-  }
-
-  const segments = [];
-  const addV = (x, z0, z1) => segments.push({ axis: 'v', coord: x, start: z0, end: z1 });
-  const addH = (z, x0, x1) => segments.push({ axis: 'h', coord: z, start: x0, end: x1 });
-  for (let z = 0; z < count; z++) {
-    for (let x = 0; x < count - 1; x++) {
-      const a = z * count + x;
-      if (!passages.has(edgeKey(a, a + 1))) {
-        const wx = -half + (x + 1) * cell;
-        const z0 = -half + z * cell;
-        addV(wx, z0, z0 + cell);
-      }
-    }
-  }
-  for (let z = 0; z < count - 1; z++) {
-    for (let x = 0; x < count; x++) {
-      const a = z * count + x;
-      if (!passages.has(edgeKey(a, a + count))) {
-        const wz = -half + (z + 1) * cell;
-        const x0 = -half + x * cell;
-        addH(wz, x0, x0 + cell);
-      }
-    }
-  }
-
-  // 미로 바깥 순환로와 연결되는 비대칭 출입구. 적 스폰마다 진입 방향이 달라진다.
-  const gates = {
-    left: new Set([1, 4, 7]), right: new Set([0, 5, 8]),
-    top: new Set([2, 6]), bottom: new Set([1, 4, 7])
-  };
-  for (let i = 0; i < count; i++) {
-    const a = -half + i * cell, b = a + cell;
-    if (!gates.left.has(i)) addV(-half, a, b);
-    if (!gates.right.has(i)) addV(half, a, b);
-    if (!gates.top.has(i)) addH(-half, a, b);
-    if (!gates.bottom.has(i)) addH(half, a, b);
-  }
-
-  segments.sort((a, b) => a.axis.localeCompare(b.axis) || a.coord - b.coord || a.start - b.start);
-  const merged = [];
-  for (const s of segments) {
-    const prev = merged[merged.length - 1];
-    if (prev && prev.axis === s.axis && prev.coord === s.coord && Math.abs(prev.end - s.start) < .01) prev.end = s.end;
-    else merged.push({ ...s });
-  }
-  return merged.map(s => s.axis === 'v'
-    ? [s.coord, (s.start + s.end) / 2, wall, s.end - s.start]
-    : [(s.start + s.end) / 2, s.coord, s.end - s.start, wall]);
-}
-
-const MAPS = {
-  box: {
-    label: 'Big Boxy', size: 58, player: [0, 0],
-    obstacles: [
-      [-10, -8, 8, 4], [11, 8, 8, 4], [-18, 13, 5, 10], [18, -13, 5, 10],
-      [0, 20, 16, 3], [0, -20, 16, 3], [-25, 0, 3, 16], [25, 0, 3, 16]
-    ],
-    spawns: [[-24,-24],[24,-24],[-24,24],[24,24], [0,-26], [0,26], [-26,-11], [26,11]]
-  },
-  lane: {
-    label: 'Thin Line', size: 62, player: [0, 0],
-    obstacles: [
-      [-18, 0, 5, 46], [18, 0, 5, 46],
-      [0, -17, 16, 4], [0, 17, 16, 4],
-      [-6, -28, 4, 10], [6, 28, 4, 10]
-    ],
-    spawns: [[0,-28], [0,28], [-24,-24], [24,24], [-24,24], [24,-24]]
-  },
-  castle: {
-    label: '4 Castles', size: 64, player: [0, -9],
-    obstacles: [
-      [-17,-17,10,10], [17,-17,10,10], [-17,17,10,10], [17,17,10,10],
-      [0,-22,14,3], [0,22,14,3], [-22,0,3,14], [22,0,3,14],
-      [0,0,4,4]
-    ],
-    spawns: [[-27,-27], [27,-27], [-27,27], [27,27], [0,-29], [0,29], [-29,0], [29,0]]
-  },
-  maze: {
-    label: 'Backrooms Maze XL', size: 112, player: [0, 0],
-    obstacles: [
-      [-43,-36,2,26], [-43,-3,2,24], [-43,32,2,30],
-      [-31,-46,24,2], [-22,-33,2,18], [-17,-21,28,2], [-31,-8,20,2], [-21,9,2,22], [-35,23,22,2], [-26,43,2,20],
-      [-7,-43,2,22], [5,-31,24,2], [18,-47,2,18], [33,-38,26,2], [45,-23,2,28],
-      [28,-15,20,2], [12,-5,2,18], [29,4,28,2], [42,18,2,24], [22,30,24,2], [8,43,2,22],
-      [-4,21,28,2], [-8,35,2,18], [-1,-17,2,16], [4,12,2,20],
-      [-51,0,12,2], [51,0,12,2], [0,-51,2,12], [0,51,2,12],
-      [-52,-52,10,2], [52,-52,10,2], [-52,52,10,2], [52,52,10,2],
-      [-14,0,10,2], [16,17,2,10], [-16,16,2,12], [15,-19,2,10], [33,45,18,2], [-46,47,18,2],
-      [-52,-18,2,18], [52,24,2,18], [-10,-52,18,2], [28,52,18,2]
-    ],
-    spawns: [[-50,-50], [50,-50], [-50,50], [50,50], [0,-52], [0,52], [-52,0], [52,0], [-34,45], [37,-44], [-45,26], [44,-18]]
-  },
-  abyss: {
-    label: 'Abyss Citadel / 극악', size: 132, player: [0, 0],
-    threatScale: 1.22, spawnIntervalScale: .78,
-    obstacles: buildAbyssCitadelObstacles(),
-    spawns: [
-      [-61,-61], [61,-61], [-61,61], [61,61],
-      [0,-61], [0,61], [-61,0], [61,0],
-      [-36,-61], [36,-61], [-36,61], [36,61],
-      [-61,-36], [-61,36], [61,-36], [61,36]
-    ]
-  },
-  relay_hub: {
-    label: 'Relay Hub A-01', size: 76, player: [-22, -24],
-    obstacles: [
-      [-27, 0, 3, 48], [27, 0, 3, 48],
-      [0, -28, 34, 3], [-10, 28, 46, 3],
-      [-6, 10, 22, 3], [12, 10, 3, 22],
-      [-18, -8, 3, 14], [2, -6, 14, 3],
-      [18, -8, 10, 3], [18, -18, 3, 10],
-      [-24, -18, 8, 3], [-8, -18, 8, 3],
-      [-24, 20, 8, 3], [-8, 20, 8, 3],
-      [18, 24, 10, 3], [18, 0, 3, 8]
-    ],
-    spawns: [[-31,-31],[31,-31],[-31,31],[31,31],[0,-33],[0,33],[-33,0],[33,0],[-20,-30],[24,28]]
-  },
-  freight_spine: {
-    label: 'Freight Spine B-09', size: 88, player: [-34, 0],
-    obstacles: [
-      [-26, 0, 4, 58], [-8, 0, 4, 40], [10, 0, 4, 44], [28, 0, 4, 58],
-      [0, -26, 18, 3], [0, 26, 18, 3],
-      [-34, -18, 10, 3], [-34, 18, 10, 3],
-      [34, -18, 10, 3], [34, 18, 10, 3],
-      [-17, -26, 10, 3], [19, 26, 10, 3],
-      [0, 0, 8, 6], [0, -38, 34, 3], [0, 38, 34, 3]
-    ],
-    spawns: [[-38,-34],[-38,34],[38,-34],[38,34],[0,-40],[0,40],[-41,0],[41,0],[-12,-40],[14,40]]
-  },
-  anchor_forge: {
-    label: 'Anchor Forge C-12', size: 94, player: [-18, 34],
-    obstacles: [
-      [-9, 0, 5, 4], [9, 0, 5, 4], [0, -9, 4, 5], [0, 9, 4, 5],
-      [-26, -26, 16, 3], [26, -26, 16, 3], [-26, 26, 16, 3], [26, 26, 16, 3],
-      [-26, -12, 3, 14], [26, -12, 3, 14], [-26, 12, 3, 14], [26, 12, 3, 14],
-      [-8, -34, 16, 3], [8, 34, 16, 3],
-      [-38, 0, 3, 42], [38, 0, 3, 42],
-      [0, -38, 42, 3], [0, 38, 42, 3],
-      [-14, 0, 8, 3], [14, 0, 8, 3],
-      [0, -14, 3, 8], [0, 14, 3, 8]
-    ],
-    spawns: [[-41,-41],[41,-41],[-41,41],[41,41],[0,-43],[0,43],[-43,0],[43,0],[-34,0],[34,0]]
-  },
-  atlas_archive: {
-    label: 'Atlas Archive D-21', size: 110, player: [-42, 38],
-    obstacles: [
-      [-36, -28, 3, 38], [-24, -8, 16, 3], [-10, -20, 3, 22],
-      [8, -28, 22, 3], [24, -12, 3, 28], [36, 8, 16, 3],
-      [-36, 18, 18, 3], [-26, 30, 3, 16], [-8, 12, 14, 3],
-      [6, 18, 3, 24], [22, 30, 18, 3], [38, -20, 3, 18],
-      [-6, 40, 34, 3], [0, -42, 46, 3], [-46, 0, 3, 64], [46, 0, 3, 64],
-      [-18, 0, 10, 3], [14, -2, 10, 3], [-2, 20, 10, 3]
-    ],
-    spawns: [[-48,-48],[48,-48],[-48,48],[48,48],[0,-50],[0,50],[-50,0],[50,0],[-34,44],[30,-44],[-42,20],[42,-8]]
-  },
-  janus_core: {
-    label: 'JANUS Core E-00', size: 124, player: [0, 48],
-    threatScale: 1.18, spawnIntervalScale: .86,
-    obstacles: [
-      [0, -50, 58, 3], [0, 50, 58, 3], [-50, 0, 3, 58], [50, 0, 3, 58],
-      [0, -26, 34, 3], [0, 26, 34, 3], [-26, 0, 3, 34], [26, 0, 3, 34],
-      [0, 0, 10, 10],
-      [-18, -40, 12, 3], [18, -40, 12, 3], [-18, 40, 12, 3], [18, 40, 12, 3],
-      [-40, -18, 3, 12], [-40, 18, 3, 12], [40, -18, 3, 12], [40, 18, 3, 12],
-      [-8, -12, 3, 14], [8, -12, 3, 14], [-8, 12, 3, 14], [8, 12, 3, 14],
-      [-12, -8, 14, 3], [12, -8, 14, 3], [-12, 8, 14, 3], [12, 8, 14, 3],
-      [0, 62, 24, 3], [-62, 0, 3, 24], [62, 0, 3, 24]
-    ],
-    spawns: [[-56,-56],[56,-56],[-56,56],[56,56],[0,-58],[0,58],[-58,0],[58,0],[-28,-56],[28,-56],[-56,28],[56,-28]]
-  }
-};
-
-const SURVIVAL_MAP_KEYS = Object.freeze(['box','lane','castle','maze','abyss']);
-
-const MAP_THEMES = Object.freeze({
-  relay_hub: { bg: 0x101518, fog: 0x1d282d, hemiSky: 0xd8f9ed, hemiGround: 0x17342f, ambient: 0.42, dir: 0x9be5d3, floor: 0x445856, wall: 0x7a958e, ceiling: 0x5c716b, panel: 0x698680, trim: 0x1f2b2d, lightPanel: 0xd8ffef, lineFloor: 0x203738, lineCeil: 0x334847, stain: 0x122425, redStain: 0x5b1717, detailStep: 5, flickerTint: 0xcffff0 },
-  freight_spine: { bg: 0x18120f, fog: 0x2e2119, hemiSky: 0xffe0b7, hemiGround: 0x3a2417, ambient: 0.40, dir: 0xffc58a, floor: 0x6f523a, wall: 0xa27a54, ceiling: 0x806146, panel: 0x936847, trim: 0x332214, lightPanel: 0xffd28f, lineFloor: 0x3a2819, lineCeil: 0x513826, stain: 0x25160d, redStain: 0x5d1410, detailStep: 6, flickerTint: 0xffd5a6 },
-  anchor_forge: { bg: 0x0d1019, fog: 0x1a2231, hemiSky: 0xb8d7ff, hemiGround: 0x121a28, ambient: 0.38, dir: 0x8cbfff, floor: 0x33465c, wall: 0x597496, ceiling: 0x495e7d, panel: 0x405872, trim: 0x162131, lightPanel: 0xcfe8ff, lineFloor: 0x172537, lineCeil: 0x20324a, stain: 0x0f1b2b, redStain: 0x421318, detailStep: 5, flickerTint: 0xb9d8ff },
-  atlas_archive: { bg: 0x16130d, fog: 0x2c2416, hemiSky: 0xfff0c0, hemiGround: 0x2f2719, ambient: 0.41, dir: 0xf6d786, floor: 0x66583d, wall: 0xb29d71, ceiling: 0x887652, panel: 0x927f59, trim: 0x2e2412, lightPanel: 0xfff1aa, lineFloor: 0x2d2518, lineCeil: 0x463920, stain: 0x1b150e, redStain: 0x4f0909, detailStep: 4, flickerTint: 0xffefb0 },
-  janus_core: { bg: 0x0d0b15, fog: 0x1f1a2f, hemiSky: 0xe1c9ff, hemiGround: 0x150f24, ambient: 0.34, dir: 0xbe9dff, floor: 0x352d4d, wall: 0x67548f, ceiling: 0x4a3d6f, panel: 0x5e4b82, trim: 0x120d1d, lightPanel: 0xe7d4ff, lineFloor: 0x1a1425, lineCeil: 0x2d2340, stain: 0x171122, redStain: 0x5d1038, detailStep: 6, flickerTint: 0xd9c1ff }
-});
-
-const getMapTheme = (key) => MAP_THEMES[key] || null;
-
-const STORY_CHAPTERS = Object.freeze([
-  {
-    id: 1, code: 'JANUS-01', title: '기원동 A동', map: 'relay_hub', waves: 3,
-    intro: `2009년, 민간 물류기업 메리디안 로지스틱스와 국책 연구팀은 “보관 공간을 접어 넣는 기술”을 만들겠다며 Project JANUS를 시작했다. 실험 시설은 평범한 창고형 백오피스와 연구 지원동으로 위장되었지만, 2011년 4월 17일 02:13, 임계 공진이 발생하며 건물 내부가 끝없이 접힌 전이 공간으로 무너졌다. 그날 이후 사람들은 이 공간을 백룸이라 불렀다.
-
-R-07이 진입하는 A동은 사고 직후 처음 봉쇄된 중계 허브이자 보안·격리 구역이다. 입구에는 직원 출입 게이트와 경비 데스크가 있고, 시설 중앙의 전고 방폭 셔터가 응급 격리동을 완전히 분리한다. 셔터는 사고 당시 생존자와 감염자를 갈라놓기 위해 내려왔으며, 중앙 중계 허브의 생체 인증을 되살리지 않으면 다른 우회로가 없다. 아직 살아 있는 구조 신호가 셔터 너머에서 발신되고 있으며, 초기 감염자들—형광등의 주파수와 공진 냉각제에 노출되어 방향 감각을 잃고 공격성만 남은 직원들—이 같은 동선을 반복 순찰하듯 배회하고 있다. 현장 기록은 누군가가 마지막 순간까지 이곳을 연구 시설이 아니라 ‘정상 운영 중인 근무 구역’처럼 유지하려 했음을 보여 준다.`,
-    goal: `보안 봉쇄선의 전원을 복구하고, 격리실에 고립된 생존자를 확보해 후방 구조 통로로 탈출시켜라.`,
-    ending: `구조한 생존자는 자신을 경비팀장 오세현이라고 밝힌다. 그는 A동의 봉쇄가 우연한 비상조치가 아니라, JANUS 서버가 사람과 시설을 통째로 백룸 안에 붙잡기 위해 의도적으로 닫아 버린 절차였다고 증언한다. 오세현은 사고 직전 선발대가 B동으로 기록 화물을 옮겼다는 사실과 함께, 메인 물류축으로 향하는 수기 출입코드를 넘긴다.`,
-    loadout: ['pistol','smg'],
-    missions: [
-      { type: 'normal', label: '봉쇄선 확보', hud: '중계 허브 전면의 감염체를 소탕해 전력 복구 작업 공간을 확보하라', rationale: '격리동 방폭 셔터는 중앙 중계 허브의 생체 인증 없이는 열리지 않는다. 먼저 허브까지 안전한 작업 동선을 만들어야 한다.', outcome: '허브 전면이 확보됐다. 이제 격리동을 봉쇄한 방폭 셔터의 인증 회로에 접근할 수 있다.', spawnScale: .56, transmission: '생존자 음성 기록: 이들은 좀비가 아니다. 형광등 소리를 따라다니는 직원들이다.' },
-      { type: 'interact', target: 'relay', label: '중계 허브 복구', hud: '보안 중계 허브를 재기동해 격리동 방폭 셔터를 개방하라', rationale: '셔터 너머는 사고 당시 생존자를 격리하기 위해 물리적으로 분리된 구역이다. 허브를 복구해야 유일한 통로의 잠금핀이 해제된다.', outcome: '중계 허브가 격리동의 생체 인증을 복원했다. 방폭 셔터가 올라가며 오세현에게 가는 유일한 길이 열린다.', hold: 2.2, minSpawn: 10, spawnScale: .58, transmission: 'R-07: 허브 내부에 근무 일지가 남아 있다. “냉각제 누출 후 직원들이 한 방향으로만 걷기 시작했다.”' },
-      { type: 'rescue', target: 'survivor', label: '생존자 구출', hud: '개방된 격리동에서 오세현을 확보해 후방 구조 통로까지 호위하라', rationale: '오세현은 B동 출입코드와 사고 당시 봉쇄 절차를 아는 유일한 생존자다. 그를 잃으면 다음 구역으로 진행할 근거와 경로가 모두 끊긴다.', outcome: '오세현이 후방 구조선에 도착했다. 그가 제공한 수기 출입코드로 B동 물류축 접근 권한이 확보됐다.', hold: 1.8, minSpawn: 14, spawnScale: .62, transmission: '오세현: 서버실을 믿지 마. 관제 목소리가 사고 당일 이후 바뀌었어.' }
-    ]
-  },
-  {
-    id: 2, code: 'JANUS-02', title: '물류축 B동', map: 'freight_spine', waves: 3,
-    intro: `B동은 JANUS가 현실과 백룸 사이에서 자재를 옮기기 위해 만든 초장거리 화물축이다. 메리디안은 여기에 실험 장비와 공진 냉각제, 그리고 감염자 격리용 특수 컨테이너를 동시에 운용했다. 사고 이후 복도 전체가 살아 있는 물류라인처럼 움직이며, 화물 태그가 달린 개체들은 같은 경로를 되풀이해 배회하고 있다.
-
-오세현의 출입코드는 선발대의 마지막 위치를 가리킨다. 그들의 기록 장치에는 “감염은 물림이 아니라 반복되는 주파수 노출로 진행된다”는 문장이 남아 있다.`,
-    goal: `선발대 기록 장치를 회수하고 B동의 예비 전력을 복구하라.`,
-    ending: `기록 장치를 분석한 결과, 감염자들은 서로 다른 주파수 계열로 분화된 “잔향 개체”라는 사실이 드러난다. 폭발형, 돌진형, 방패형 개체는 모두 같은 인간 직원이 다른 자극에 적응한 결과였다. 동시에 기록 속 좌표는 C동의 공간 고정로를 지목한다.`,
-    loadout: ['pistol','smg','shotgun'],
-    missions: [
-      { type: 'cargo', target: 'cargo', label: '선발대 기록 화물 확보', hud: '차폐된 기록 화물을 분석 플랫폼까지 직접 운반하라', rationale: '기록 장치는 공진 노이즈 때문에 무선 전송이 불가능하며, 충격을 받으면 좌표 데이터가 손상된다. 그래서 플레이어가 물리적으로 운반해야 한다.', outcome: '차폐 케이스가 분석 플랫폼에 고정됐다. 선발대가 남긴 감염 주파수와 C동 좌표를 복원할 수 있다.', hold: 1.2, minSpawn: 12, spawnScale: .64, transmission: '관제 로그: “컨테이너 7번은 절대 열지 말 것.” 그런데 이미 내부가 비어 있다.' },
-      { type: 'rush', label: '물류축 방어', hud: '분석이 끝날 때까지 폭발 개체의 플랫폼 접근을 차단하라', rationale: '분석 플랫폼이 기록 케이스를 읽는 동안 고주파 신호가 발생해 폭발형 잔향 개체를 끌어당긴다. 방어는 분석 시간을 확보하기 위한 필수 절차다.', outcome: '플랫폼 분석이 완료됐다. 폭발형 개체가 고주파 장비를 우선 공격한다는 행동 규칙도 확인됐다.', minSpawn: 18, spawnScale: .74, transmission: 'R-07: 주파수가 높아질수록 개체의 행동이 빨라진다. 단순 좀비 현상이 아니다.' },
-      { type: 'generator', target: 'generator', label: '예비 발전기 재가동', hud: '분리된 세 전력 구간을 순차 복구해 C동 좌표 지도를 출력하라', rationale: 'B동의 긴 물류축은 과부하를 막기 위해 세 개의 독립 전력 링으로 나뉘어 있다. 하나라도 꺼져 있으면 좌표 지도와 다음 방화문이 작동하지 않는다.', outcome: '세 전력 링이 동기화됐다. C동 공간 고정로의 좌표와 안전 진입 시간이 지도에 표시된다.', hold: 2.0, count: 3, minSpawn: 16, spawnScale: .70, transmission: '오세현: 전력만 돌아오면 C동 고정로 지도가 뜬다. 그때 이곳이 왜 접혔는지 알게 될 거다.' }
-    ]
-  },
-  {
-    id: 3, code: 'JANUS-03', title: '고정로 C동', map: 'anchor_forge', waves: 3,
-    intro: `C동은 백룸의 벽을 “고정된 현실처럼 보이게” 유지하던 공간 고정로다. 연구진은 이곳에서 공진 코어를 박아 넣어 무한히 접히는 복도를 억지로 정렬했다. 그러나 사고 직후 코어들은 오히려 공간 접힘을 증폭했고, 살아남은 연구원들은 자신들이 만든 정렬 장치 안에 갇혀 코어를 보호하는 감염 개체로 변했다.
-
-선발대 기록에 따르면, JANUS의 총책임자 한민석 박사는 사고 직전 “시설 전체를 백룸 내부에 그대로 복제해 영구 격리하겠다”고 선언했다.`,
-    goal: `공간 고정로를 파괴하고 더 깊은 구역으로 가는 격리문을 개방하라.`,
-    ending: `마지막 고정 코어가 무너지자 C동 전체가 잠시 제 모양을 되찾고, 한민석의 영상 메모가 재생된다. 그는 백룸을 재난이 아닌 저장장치로 보았고, 직원들을 “새 공간에 적응한 첫 표본”이라 부른다. 다음 좌표는 연구 기록 보관구역 D동이다.`,
-    loadout: ['pistol','smg','shotgun','grenade','barrel'],
-    missions: [
-      { type: 'core', label: '보조 고정 코어 파괴', hud: '외곽 코어를 파괴해 중앙 격리문의 위상 압력을 낮춰라', rationale: '고정 코어는 단순 발전기가 아니라 벽과 통로의 좌표를 붙잡는 닻이다. 외곽 코어를 먼저 끊어야 제어반이 현실 좌표에 고정된다.', outcome: '외곽 위상 압력이 낮아졌다. 동·서 제어반이 같은 시간축에 머물기 시작한다.', coreCount: 2, minSpawn: 12, spawnScale: .66, transmission: '관제 기록 복원: 코어 손실 시 벽 배치가 재작성된다. 즉, 맵 그 자체가 장치다.' },
-      { type: 'door', target: 'blastDoor', label: 'C동 격리문 해제', hud: '서로 다른 위상에 놓인 동·서 제어반을 인증해 중앙문을 열어라', rationale: '한쪽 인증만으로 문을 열면 복제된 통로가 충돌한다. 두 제어반을 모두 작동시켜 현재 좌표가 하나임을 증명해야 한다.', outcome: '양측 인증값이 일치했다. 중앙 격리문이 실제 좌표에 고정되며 통로가 열린다.', hold: 1.8, count: 2, minSpawn: 18, spawnScale: .78, transmission: 'R-07: 제어반 반대편에서도 내 발소리가 들린다. 공간이 지연 복제되고 있어.' },
-      { type: 'core', label: '주 고정로 붕괴', hud: '중앙 고정 코어를 파괴해 D동으로 이어지는 복제 통로를 하나로 합쳐라', rationale: '중앙 코어가 살아 있는 동안 출구는 여러 복제본으로 갈라져 어느 문도 실제 D동에 닿지 않는다. 코어를 제거해야 경로가 하나로 수렴한다.', outcome: '복제 통로가 하나의 출구로 수렴했다. D동 아틀라스 기록보관구역의 좌표가 고정된다.', coreCount: 3, minSpawn: 16, spawnScale: .76, transmission: '오세현: 코어가 살아 있는 동안은 이 시설이 스스로 길을 막는다.' }
-    ]
-  },
-  {
-    id: 4, code: 'JANUS-04', title: '아틀라스 기록보관구역', map: 'atlas_archive', waves: 4,
-    intro: `D동 아틀라스 기록보관구역은 JANUS의 설계도와 실험자 진술서가 저장된 곳이다. 수십 개의 문서 보관실이 백룸 내부에서 서로 다른 시간축으로 밀려나면서, 탐사팀 43명이 여기서 사라졌다. 감염 개체들은 이제 시설의 직원이 아니라, 기록을 읽고 또 읽는 동안 동일 문장을 반복하도록 망가진 “문서 잔향”에 가깝다.
-
-R-07은 여기서 처음으로 백룸 발생 원인을 완전히 복원할 수 있다. 목표는 기록을 고정할 좌표 비콘을 세워, 끊어진 동선을 하나의 시간축으로 묶는 것이다.`,
-    goal: `아틀라스 기록을 복원하고 JANUS 코어의 좌표를 확보하라.`,
-    ending: `비콘과 스캐너가 마지막 기록실을 관통하자 한민석의 최종 보고서가 열린다. 사고는 실패가 아니라 계획의 일부였다. 그는 백룸을 영구 보관소로 만들고, 관제 AI에 자신의 판단 패턴을 덧씌워 시설을 유지하도록 했다. JANUS 코어 E-00에서 모든 송출이 시작되고 있다.`,
-    loadout: ['pistol','smg','shotgun','grenade','barrel','wall','rocket'],
-    missions: [
-      { type: 'interact', target: 'beacon', label: '좌표 비콘 설치', hud: '서로 다른 시간대의 기록실 세 곳에 비콘을 설치하라', rationale: 'D동의 방들은 기록을 읽는 순서에 따라 시간이 달라진다. 세 기준점을 동시에 고정해야 스캐너가 같은 문서를 한 시점의 자료로 해석할 수 있다.', outcome: '세 비콘이 하나의 시간축을 형성했다. 기록실의 문 번호와 내부 좌표가 더 이상 바뀌지 않는다.', hold: 1.45, count: 3, minSpawn: 18, spawnScale: .74, transmission: '자동 기록 음성: “문서를 닫지 마십시오. 닫는 순간 복도가 다시 씁니다.”' },
-      { type: 'core', label: '기록 왜곡 코어 파괴', hud: '비콘 신호를 덮어쓰는 왜곡 코어를 제거하라', rationale: '왜곡 코어는 오래된 문서 내용을 실제 벽과 문으로 투사해 비콘 좌표를 계속 오염시킨다. 제거하지 않으면 스캐너가 거짓 기록실로 이동한다.', outcome: '기록 투사가 멈췄다. 아틀라스 스캐너가 핵심 기록실까지 안전한 단일 경로를 계산한다.', coreCount: 3, minSpawn: 18, spawnScale: .80, transmission: 'R-07: 왜곡 코어가 기록을 벽 재질처럼 덧칠하고 있다.' },
-      { type: 'rush', label: '보관구역 방어', hud: '좌표 동기화가 끝날 때까지 비콘을 향하는 폭발 개체를 차단하라', rationale: '동기화 비콘은 백룸의 시간 왜곡과 반대되는 강한 기준 신호를 낸다. 시설에 고정된 잔향 개체는 그 신호를 파괴하려 몰려든다.', outcome: '비콘 동기화가 완료됐다. 이동식 스캐너가 시간축을 잃지 않고 핵심 기록실로 출발할 수 있다.', minSpawn: 24, spawnScale: .88, transmission: '오세현: 서류실마다 탈출 동선이 달라진다. 네가 만든 벽도 시간은 벌어 줄 거다.' },
-      { type: 'escort', target: 'scanner', label: '아틀라스 스캐너 호위', hud: '고정된 좌표선을 따라 스캐너를 핵심 기록실까지 호위하라', rationale: '핵심 기록은 네트워크에서 분리된 필름 보관실에만 남아 있다. 스캐너가 직접 이동해 판독해야 하며, 이동 중 비콘 신호를 따라야 길을 잃지 않는다.', outcome: '스캐너가 한민석의 최종 보고서를 복원했다. 모든 송출이 E-00 JANUS 코어에서 시작된다는 사실이 확인된다.', duration: 42, minSpawn: 22, maxActive: 26, spawnScale: .82, transmission: '한민석의 변조된 목소리: 기록을 읽은 순간 너도 백룸의 일부가 된다.' }
-    ]
-  },
-  {
-    id: 5, code: 'JANUS-05', title: 'JANUS 코어 E-00', map: 'janus_core', waves: 4,
-    intro: `E-00은 JANUS의 원점이자 백룸을 붙잡는 코어실이다. 중앙 코어는 한민석의 판단 패턴을 덧씌운 관제 AI와, 공진 냉각제에 가장 오래 노출된 고위 연구진의 신경 기록을 동시에 운용한다. 여기서 백룸의 형광등 주파수가 감염자를 조율하고, 좀비라 불리던 잔향 개체들은 하나의 거대한 군집처럼 움직인다.
-
-R-07의 마지막 목표는 단순 생존이 아니다. 코어를 보호하는 압력 밸브와 증폭기를 파괴하고, 관제실의 목소리가 된 존재—한민석이 스스로를 진화시켜 만든 균열술사—를 제거해야 한다.`,
-    goal: `JANUS 코어를 정지시키고 백룸 감염 송출원을 제거하라.`,
-    ending: `균열술사가 무너지자 코어실의 형광등이 하나씩 꺼진다. 백룸 전체의 송출이 약해지며 감염 군집도 흐트러진다. 그러나 탈출 직전, R-07의 헬멧 로그에는 마지막 문장이 남는다. “문은 닫혔지만, 공간은 아직 접혀 있다.” 스토리는 끝나지만 백룸은 완전히 사라지지 않았다.`,
-    loadout: ['pistol','smg','shotgun','grenade','barrel','wall','rocket','railgun'],
-    boss: 'devil',
-    missions: [
-      { type: 'door', target: 'citadelDoor', label: '외곽 밸브 해제', hud: '세 압력 밸브를 열어 중앙 코어실 방벽의 공진 압력을 분산하라', rationale: '코어실 방벽은 물리 문이 아니라 압력과 주파수로 유지되는 장막이다. 세 유로를 모두 열어야 장막이 무너질 만큼 압력이 낮아진다.', outcome: '외곽 압력이 분산됐다. 코어실 방벽이 낮아지며 증폭기 구역으로 진입할 수 있다.', hold: 2.0, count: 3, minSpawn: 26, spawnScale: .92, transmission: 'R-07: 밸브가 주파수를 낮출 때마다 개체 떼의 움직임이 잠깐씩 흔들린다.' },
-      { type: 'core', label: '증폭기 코어 파괴', hud: '사방의 증폭 코어를 파괴해 중앙 송출을 약화하라', rationale: '네 증폭기는 형광등 주파수를 각 구역에 재송출해 잔향 개체를 하나의 군집으로 묶는다. 먼저 끊어야 중앙 코어와 균열술사가 약해진다.', outcome: '구역 송출이 끊기며 잔향 군집의 동기화가 무너졌다. 중앙 코어의 비상 정전 절차가 시작된다.', coreCount: 4, minSpawn: 22, spawnScale: .94, transmission: '오염된 관제: 인간 보관 절차를 중단하지 마라. 코어는 실패가 아니다.' },
-      { type: 'blackout', label: '코어실 정전 진입', hud: '비상 정전 동안 잔존 개체를 제거하고 중앙 제어권을 확보하라', rationale: '증폭기 파괴로 코어가 냉각을 위해 조명을 끈다. 시야는 나빠지지만 감염 개체를 조율하던 주파수도 약해지는 유일한 진입 시간이다.', outcome: '정전 구역이 확보됐다. 중앙 코어가 직접 방어 개체인 균열술사를 깨운다.', minSpawn: 28, spawnScale: 1.00, transmission: '오세현: 정전이 오히려 기회다. 형광등 소리가 약해졌다.' },
-      { type: 'normal', label: '균열술사 제거', hud: '한민석의 판단 패턴과 결합된 균열술사를 제거해 송출원을 정지시켜라', rationale: '균열술사는 코어의 자동 복구 판단을 수행하는 살아 있는 관리자다. 코어만 손상시키면 그가 다시 기동하므로 둘의 연결을 전투로 끊어야 한다.', outcome: '관리자 신호가 소멸했다. JANUS 코어의 자동 복구가 멈추고 백룸 전역의 감염 송출이 약해진다.', spawnScale: 1.04, boss: true, transmission: '한민석/관제: 저장은 끝나지 않는다. 백룸은 잊힌 인간들의 새로운 창고다.' }
-    ]
-  }
-]);
-
-const STORY_DIALOGUES = Object.freeze({
-  1: {
-    intro: [
-      '격리국 관제|R-07, 중계 허브 A-01 진입 확인. 사고 발생 후 처음으로 내부 영상이 돌아왔다.',
-      'R-07|벽지가 아니라 산업용 흡음재다. 누군가 이곳을 평범한 백오피스처럼 덮어 놓았지만, 구조는 명백한 연구 시설이야.',
-      '알 수 없는 무전|형광등이 세 번 깜박이면 움직이지 마.',
-      '격리국 관제|응급 격리동에서 사람 반응이 하나 잡힌다. 중앙 셔터가 모든 우회로를 막고 있다. 허브 인증을 복구한 뒤 진입한다.'
-    ],
-    mission: [
-      '격리국 관제|봉쇄선부터 정리한다. 살아 있는 신호와 감염 신호가 경비 데스크 주변에서 겹쳐 있다.',
-      'R-07|중계기 회로가 사고 당시 시간에서 멈춰 있다. 이 허브가 중앙 방폭 셔터의 생체 인증과 유일한 우회 회로를 맡고 있어.',
-      '오세현|셔터가 열렸나? 그게 이 격리동의 유일한 출입구야. 불빛이 돌아오면 놈들도 함께 깨어난다.',
-      'R-07|복도 동선이 살아 있다. 누군가 마지막까지 사람을 이곳에 머물게 하려 한 것 같다.'
-    ],
-    complete: ['R-07|A동 경로 확보. 격리실 생존자 확보 완료.', '오세현|B동으로 가면 선발대 기록을 찾을 수 있어. 하지만 컨테이너 표식을 믿지는 마. 사고 뒤엔 표식도 거짓말을 한다.'],
-    object: { relay:'JANUS 자동 관제|중계 허브 인증. 격리동 방폭 셔터의 잠금핀을 해제합니다.', survivor:'오세현|사람 목소리군. 열한 해 만에 처음 듣는 진짜 사람 목소리야. 내가 아직 사람으로 보인다면, 우린 아직 늦지 않았어.' }
-  },
-  2: {
-    intro: [
-      '오세현|B동은 화물축이야. 길어 보이는 게 아니라 실제로 같은 구간이 계속 이어져.',
-      'R-07|바닥 레일에 최근 사용 흔적이 있다. 누군가 지금도 화물을 옮기고 있어.',
-      '선발대 기록|감염은 물림으로 전파되지 않는다. 조명 주파수 노출을 차단하라.'
-    ],
-    mission: [
-      '격리국 관제|선발대 케이스를 분석 플랫폼까지 운반하라. 손상은 허용되지 않는다.',
-      'R-07|컨테이너 안쪽에서 두드리는 소리가 난다. 열지는 않겠다.',
-      '오세현|발전기는 세 대가 한 회로야. 하나를 켜면 다른 구역의 놈들도 깨어날 거다.'
-    ],
-    complete: ['선발대 기록|잔향 개체는 인간의 반복 행동이 주파수에 고정된 결과다.', 'R-07|좀비가 아니라 시설에 기록된 사람의 잔상이라는 건가.'],
-    object: { cargo:'R-07|기록 화물 연결. 이동 중에는 사격 각도가 제한될 수 있다.', generator:'JANUS 자동 관제|예비 전력 복구. 인체 보관 구역의 잠금을 해제합니다.' }
-  },
-  3: {
-    intro: [
-      '오세현|C동 고정로는 벽을 제자리에 묶는 장치였어. 사고 뒤에는 반대로 출구를 막았지.',
-      'R-07|같은 문이 네 방향에 있다. 각 문 뒤에서 내 발소리가 한 박자 늦게 들린다.',
-      '한민석 기록|공간은 무너진 것이 아니다. 더 효율적인 형태로 접혔다.'
-    ],
-    mission: [
-      '격리국 관제|보조 코어를 파괴해 중앙 회로의 부하를 분산하라.',
-      'R-07|동·서 제어반을 동시에 인증해야 한다. 공간 지연을 계산해서 순차 작동한다.',
-      '오세현|주 고정로가 무너지면 길이 바뀐다. 파괴 직후 멈추지 말고 움직여.'
-    ],
-    complete: ['한민석 기록|직원들은 희생자가 아니다. 새로운 저장 공간에 적응한 첫 표본이다.', 'R-07|그는 사고를 멈추려 한 게 아니라 완성하려 했다.'],
-    object: { blastDoor:'R-07|첫 번째 잠금핀 해제. 반대편 제어반으로 이동한다.', machine:'격리국 관제|공간 위상 흔들림 감지. 시야 변화에 대비하라.' }
-  },
-  4: {
-    intro: [
-      'R-07|아틀라스 기록실. 종이 냄새가 나는데 바닥에는 먼지가 없다.',
-      '오세현|여기서는 기록을 읽는 순서가 길을 만든다. 같은 문서를 두 번 열지 마.',
-      '탐사대원 기록|우리는 43명이 들어왔다. 지금 무전에는 44명의 숨소리가 들린다.'
-    ],
-    mission: [
-      '격리국 관제|좌표 비콘 세 개를 설치한다. 정확한 위치는 접근 후 표시된다.',
-      'R-07|코어가 벽이 아니라 기록 문장을 다시 쓰고 있다.',
-      '오세현|비콘을 지켜. 파괴되면 지금까지 온 길도 사라질 수 있어.',
-      '한민석 기록|스캐너가 읽는 것은 공간이 아니다. 그 안에 저장된 사람이다.'
-    ],
-    complete: ['R-07|최종 보고서 복원 완료. 송출원은 E-00.', '오세현|거기서 관제 목소리가 시작됐어. 그리고 아마 내 목소리도.'],
-    object: { beacon:'아틀라스 시스템|시간축 기준점 고정. 누락된 기록 구역을 재배치합니다.', scanner:'R-07|스캐너 이동 시작. 파동이 지나간 뒤의 벽만 진짜다.' }
-  },
-  5: {
-    intro: [
-      '오세현|E-00에 들어가면 내 무전도 믿지 마. 코어는 사람 목소리를 복사한다.',
-      'R-07|중앙에서 모든 형광등의 진동이 맞물린다. 감염체가 하나의 호흡처럼 움직이고 있어.',
-      '한민석/관제|요원 R-07. 귀환 명령을 취소합니다. 당신의 기록은 이곳에 보관됩니다.'
-    ],
-    mission: [
-      'R-07|압력 밸브를 열 때마다 군집 신호가 약해진다. 세 개 모두 해제한다.',
-      '한민석/관제|증폭기는 공간의 심장이다. 파괴는 곧 내부 인원의 소거를 의미한다.',
-      '오세현|불이 꺼졌다. 지금이야. 놈들이 서로를 구분하지 못해.',
-      '한민석|나는 관제가 아니다. 관제가 나를 기억하는 방식이다.'
-    ],
-    complete: ['R-07|JANUS 송출 정지. 감염 군집 동기화가 무너진다.', '알 수 없는 무전|문은 닫혔지만, 공간은 아직 접혀 있다.'],
-    object: { citadelDoor:'JANUS 자동 관제|압력 손실. 인간 보관 절차에 치명적 오류가 발생했습니다.', machine:'한민석/관제|증폭기를 만지지 마라. 그 안에는 아직 깨어 있는 사람들이 있다.' }
-  }
-});
-
-const storyChapterById = (id) => STORY_CHAPTERS.find(chapter => chapter.id === Number(id)) || STORY_CHAPTERS[0];
-
-class NetAdapter {
-  constructor(game) {
-    this.game = game;
-    this.enabled = false;
-    this.connected = false;
-    this.socket = null;
-    this.room = null;
-    this.lastInputAt = 0;
-    this.lastInputSeq = 0;
-    this.playerToken = this.loadPlayerToken();
-    this.serverUrl = this.resolveServerUrl();
-    this.pingMs = null;
-    this.pingTimer = null;
-    this.lastRoomSnapshot = null;
-    this.connect();
-  }
-
-
-
-  loadPlayerToken() {
-    try {
-      let token = localStorage.getItem('bhfps_player_token');
-      if (!token) {
-        token = 'pt_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-        localStorage.setItem('bhfps_player_token', token);
-      }
-      return token;
-    } catch (_) {
-      return 'pt_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    }
-  }
-
-  resolveServerUrl() {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const fromQuery = params.get('server') || '';
-      const fromConfig = window.BHFPS_CONFIG?.SERVER_URL || '';
-      return String(fromQuery || fromConfig || '').trim().replace(/\/$/, '');
-    } catch (_) { return ''; }
-  }
-
-  updatePingUI(ms = null) {
-    this.pingMs = Number.isFinite(ms) ? Math.max(0, Math.round(ms)) : null;
-    if (!UI.pingText) return;
-    UI.pingText.classList.remove('warn', 'bad');
-    if (this.pingMs == null || !this.connected) {
-      UI.pingText.textContent = 'PING --';
-      return;
-    }
-    UI.pingText.textContent = `PING ${this.pingMs}ms`;
-    if (this.pingMs > 180) UI.pingText.classList.add('bad');
-    else if (this.pingMs > 90) UI.pingText.classList.add('warn');
-  }
-
-  startPingLoop() {
-    clearInterval(this.pingTimer);
-    const pingOnce = () => {
-      if (!this.socket?.connected) { this.updatePingUI(null); return; }
-      const t0 = performance.now();
-      this.socket.timeout(1600).emit('latencyPing', { t: Date.now() }, (err) => {
-        if (err) { this.updatePingUI(null); return; }
-        this.updatePingUI(performance.now() - t0);
-      });
-    };
-    pingOnce();
-    this.pingTimer = setInterval(pingOnce, 2500);
-  }
-
-  rememberRoom(roomCode = '') {
-    try {
-      if (!roomCode) return;
-      localStorage.setItem('bhfps_last_room', JSON.stringify({ roomCode, token: this.playerToken, time: Date.now() }));
-    } catch (_) {}
-  }
-
-  tryRestoreRoom() {
-    if (!this.connected || !this.game?.lobby?.roomCode) return;
-    this.socket.emit('joinRoom', { roomCode: this.game.lobby.roomCode, playerToken: this.playerToken, reconnect: true });
-  }
-
-  setNetStatus(state = 'offline', text = '') {
-    if (!UI.netState || !UI.netStatusText) return;
-    UI.netState.classList.remove('connected', 'offline', 'error');
-    UI.netState.classList.add(state === 'connected' ? 'connected' : (state === 'error' ? 'error' : 'offline'));
-    UI.netState.textContent = state === 'connected' ? '서버 연결됨' : (state === 'error' ? '서버 오류' : '서버 미연결');
-    UI.netStatusText.textContent = text || (state === 'connected'
-      ? 'Socket.IO 서버 기반 방 만들기/입장/준비/시작을 사용 중이다.'
-      : 'npm install 후 npm start로 실행하면 실제 서버 로비가 켜진다.');
-  }
-
-  connect() {
-    if (typeof window === 'undefined' || typeof window.io !== 'function') {
-      this.setNetStatus('offline', 'Socket.IO 클라이언트를 찾지 못했다. Python 서버로 열면 로컬 테스트 로비만 작동한다.');
-      return;
-    }
-    try {
-      const transports = window.BHFPS_CONFIG?.FORCE_WEBSOCKET ? ['websocket'] : ['websocket', 'polling'];
-      const options = { transports, timeout: 4500, reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 700, reconnectionDelayMax: 4000, auth: { playerToken: this.playerToken } };
-      this.socket = this.serverUrl ? window.io(this.serverUrl, options) : window.io(options);
-    } catch (err) {
-      this.setNetStatus('error', 'Socket.IO 초기화 실패: ' + (err?.message || err));
-      return;
-    }
-
-    this.socket.on('connect', () => {
-      this.connected = true;
-      this.enabled = true;
-      const where = this.serverUrl || location.origin;
-      this.setNetStatus('connected', `서버 접속 완료 · ${where} · id ${this.socket.id.slice(0, 5)}`);
-      this.startPingLoop();
-      this.game.updateLobbyUI('서버에 연결됐다. 2인 플레이에서 방을 만들거나 방 코드로 입장할 수 있다.');
-      this.tryRestoreRoom();
-    });
-    this.socket.on('disconnect', () => {
-      this.connected = false;
-      this.updatePingUI(null);
-      this.setNetStatus('offline', '서버 연결이 끊겼다. 자동 재접속을 시도한다.');
-      this.game.updateLobbyUI('서버 연결이 끊겼다. 방을 다시 만들거나 입장해야 한다.');
-    });
-    this.socket.on('connect_error', (err) => {
-      this.connected = false;
-      this.updatePingUI(null);
-      this.setNetStatus('error', '서버 접속 실패: ' + (err?.message || 'unknown') + (this.serverUrl ? ` · ${this.serverUrl}` : ''));
-    });
-    this.socket.on('roomCreated', (payload) => this.applyRoomState(payload, '방을 만들었다. 방 코드를 상대에게 알려줘라.'));
-    this.socket.on('roomJoined', (payload) => this.applyRoomState(payload, '방에 입장했다. 준비를 누르면 호스트가 시작할 수 있다.'));
-    this.socket.on('lobbyUpdate', (payload) => this.applyRoomState(payload));
-    this.socket.on('lobbyError', (payload) => {
-      this.game.updateLobbyUI(payload?.message || '로비 오류가 발생했다.');
-      this.setNetStatus('error', payload?.message || '로비 오류');
-    });
-    this.socket.on('gameStart', (payload) => {
-      const settings = payload?.settings || {};
-      if (settings.map) UI.map.value = settings.map;
-      if (settings.diff) UI.diff.value = settings.diff;
-      if (settings.quality) UI.quality.value = settings.quality;
-      if (settings.startWave) UI.startWave.value = String(settings.startWave);
-      this.game.updateLobbyUI('서버가 게임 시작 신호를 보냈다. 양쪽 클라이언트가 같은 설정으로 시작한다.');
-      this.game.startFromMenu(true);
-    });
-    this.socket.on('remoteInput', (payload) => {
-      this.game.applyRemoteInput(payload?.playerId, payload?.state || payload?.input);
-    });
-    this.socket.on('stateSnapshot', (payload) => {
-      this.game.applyNetworkSnapshot(payload);
-    });
-    this.socket.on('remoteAction', (payload) => {
-      this.game.applyRemoteAction(payload?.playerId, payload?.action || payload);
-    });
-  }
-
-  roomPlayersToLobby(room) {
-    const selfId = this.socket?.id;
-    const players = room?.players || [];
-    const self = players.find(p => p.id === selfId);
-    const other = players.find(p => p.id !== selfId);
-    const role = self?.role || (room?.hostId === selfId ? 'host' : 'guest');
-    return {
-      mode: 'coop',
-      role,
-      roomCode: room?.roomCode || '',
-      ready: !!self?.ready,
-      remoteReady: !!other?.ready,
-      remoteSeen: !!other,
-      playerId: selfId || this.game.lobby.playerId || 'net-local'
-    };
-  }
-
-  applyRoomState(payload = {}, extra = '') {
-    const room = payload.room || payload;
-    if (!room?.roomCode) return;
-    this.room = room;
-    this.lastRoomSnapshot = room;
-    this.rememberRoom(room.roomCode);
-    this.game.lobby = this.roomPlayersToLobby(room);
-    if (UI.roomCodeInput) UI.roomCodeInput.value = room.roomCode;
-    this.game.setPlayMode('coop');
-    this.game.updateLobbyUI(extra);
-    if (payload.message) this.game.showToast(payload.message);
-  }
-
-  createRoom(settings = {}) {
-    if (!this.connected) return false;
-    this.socket.emit('createRoom', { settings, playerToken: this.playerToken });
-    this.game.updateLobbyUI('서버에 방 생성 요청 중...');
-    return true;
-  }
-
-  joinRoom(roomCode = '') {
-    if (!this.connected) return false;
-    this.socket.emit('joinRoom', { roomCode, playerToken: this.playerToken });
-    this.game.updateLobbyUI('서버 방 입장 요청 중...');
-    return true;
-  }
-
-  setReady(ready) {
-    if (!this.connected || !this.game.lobby.roomCode) return false;
-    this.socket.emit('setReady', { roomCode: this.game.lobby.roomCode, ready: !!ready });
-    return true;
-  }
-
-  startGame(settings = {}) {
-    if (!this.connected || !this.game.lobby.roomCode) return false;
-    this.socket.emit('startGame', { roomCode: this.game.lobby.roomCode, settings });
-    this.game.updateLobbyUI('서버에 게임 시작 요청 중...');
-    return true;
-  }
-
-  sendInput() {
-    if (!this.connected || !this.game.running || this.game.paused || this.game.gameOver || this.game.lobby.mode !== 'coop') return;
-    const t = performance.now();
-    if (t - this.lastInputAt < 33) return; // v35: 서버 권위 이동 보정을 위해 약 30Hz로 입력을 보낸다.
-    this.lastInputAt = t;
-    const keys = {};
-    for (const k of this.game.input.keys) keys[k] = true;
-    this.socket.emit('playerInput', {
-      roomCode: this.game.lobby.roomCode,
-      seq: ++this.lastInputSeq,
-      time: t,
-      keys,
-      look: { yaw: this.game.yaw, pitch: this.game.pitch },
-      weapon: this.game.weapon?.id || 'pistol',
-      flags: {
-        fire: this.game.input.actionDown('fire'),
-        ads: this.game.ads > .45 || this.game.input.actionDown('aim'),
-        reload: !!this.game.reload?.active,
-        move: Number(this.game.moveIntensity || 0)
-      },
-      player: { x: this.game.player.x, y: this.game.player.y, z: this.game.player.z, hp: Math.round(this.game.hp) }
-    });
-  }
-
-  sendAction(actionType, weapon, extra = {}) {
-    if (!this.connected || !this.game.running || this.game.paused || this.game.gameOver || this.game.lobby.mode !== 'coop') return false;
-    const w = typeof weapon === 'string' ? this.game.getWeapon(weapon) : (weapon || this.game.getWeapon());
-    const reserve = this.game.ammo?.[w?.id] === Infinity ? 'Infinity' : (this.game.ammo?.[w?.id] || 0);
-    this.socket.emit('playerAction', {
-      roomCode: this.game.lobby.roomCode,
-      actionType,
-      seq: ++this.lastInputSeq,
-      time: performance.now(),
-      weapon: w?.id || this.game.selectedWeapon || 'pistol',
-      look: { yaw: this.game.yaw, pitch: this.game.pitch },
-      position: { x: this.game.player.x, y: this.game.player.y, z: this.game.player.z },
-      ads: this.game.ads > .45 || this.game.input.actionDown('aim'),
-      mag: this.game.mag?.[w?.id] || 0,
-      reserve,
-      ...extra
-    });
-    return true;
-  }
-
-  receiveSnapshot() { return null; }
 }
 
 class Input {
@@ -956,18 +299,18 @@ class MobileController {
     this.enabled = isMobileDevice();
     this.actions = {
       fire: { label: '발사' }, adsFire: { label: 'ADS 발사' }, aim: { label: '조준' }, jump: { label: '점프' },
-      sprint: { label: '달리기' }, reload: { label: '재장전' }, heal: { label: '회복' },
+      sprint: { label: '달리기' }, reload: { label: '재장전' }, heal: { label: '회복' }, interact:{label:'목표'},
       weapon: { label: '무기 변경' }, none: { label: '사용 안 함' }
     };
-    this.configurableControls = ['fireLeft','fire','adsFire','aim','jump','sprint','reload','heal','weapon'];
+    this.configurableControls = ['fireLeft','fire','adsFire','aim','jump','sprint','reload','heal','interact','weapon'];
     this.controlNames = {
       fireLeft:'좌측 발사 버튼', fire:'우측 발사 버튼', adsFire:'ADS 발사 버튼', aim:'조준 버튼',
-      jump:'점프 버튼', sprint:'달리기 잠금 버튼', reload:'재장전 버튼', heal:'회복 버튼', weapon:'무기 변경 버튼'
+      jump:'점프 버튼', sprint:'달리기 잠금 버튼', reload:'재장전 버튼', heal:'회복 버튼', interact:'목표 상호작용 버튼', weapon:'무기 변경 버튼'
     };
-    this.defaultMapping = { fireLeft:'fire', fire:'fire', adsFire:'adsFire', aim:'aim', jump:'jump', sprint:'sprint', reload:'reload', heal:'heal', weapon:'weapon', pause:'pause' };
+    this.defaultMapping = { fireLeft:'fire', fire:'fire', adsFire:'adsFire', aim:'aim', jump:'jump', sprint:'sprint', reload:'reload', heal:'heal', interact:'interact', weapon:'weapon', pause:'pause' };
     this.defaultPositions = {
       joystick:{x:14,y:72}, fireLeft:{x:11,y:35}, fire:{x:91,y:64}, adsFire:{x:80,y:53}, aim:{x:79,y:70}, jump:{x:92,y:39},
-      sprint:{x:28,y:53}, reload:{x:89,y:84}, heal:{x:66,y:86}, weapon:{x:77,y:88}, pause:{x:96,y:10}
+      sprint:{x:28,y:53}, reload:{x:89,y:84}, heal:{x:66,y:86}, interact:{x:66,y:65}, weapon:{x:77,y:88}, pause:{x:96,y:10}
     };
     this.mapping = { ...this.defaultMapping };
     this.positions = JSON.parse(JSON.stringify(this.defaultPositions));
@@ -1378,13 +721,13 @@ class MobileController {
   }
 
   setAction(action, active, firstDown = false) {
-    if (['fire','adsFire','aim','jump','sprint','reload','heal'].includes(action)) this.refreshCompositeActions();
+    if (['fire','adsFire','aim','jump','sprint','reload','heal','interact'].includes(action)) this.refreshCompositeActions();
     else if (action === 'weapon' && active && firstDown) this.input.cycleVirtualWeapon(1);
     else if (action === 'pause' && active && firstDown) this.game.pause();
   }
 
   syncHeldAction(action) {
-    if (!['fire','adsFire','aim','jump','sprint','reload','heal'].includes(action)) return;
+    if (!['fire','adsFire','aim','jump','sprint','reload','heal','interact'].includes(action)) return;
     this.refreshCompositeActions();
   }
 
@@ -1393,7 +736,7 @@ class MobileController {
     this.input.setVirtualAction('fire', held('fire') || held('adsFire'));
     this.input.setVirtualAction('aim', this.aimLocked || held('aim') || held('adsFire'));
     this.input.setVirtualAction('sprint', this.sprintLocked || this.joystickSprint || held('sprint'));
-    for (const action of ['jump','reload','heal']) this.input.setVirtualAction(action, held(action));
+    for (const action of ['jump','reload','heal','interact']) this.input.setVirtualAction(action, held(action));
   }
 
   releaseAll() {
@@ -1441,19 +784,7 @@ class MobileController {
   }
 }
 
-const STORY_MUSIC_PROFILES = Object.freeze({
-  0: { tempo: 1, bass: 1, lead: 1, pulse: 1, ambient: 520, hum: 62, upper: 124.5, motif: [1,1,1,1] },
-  // A동: 통신 중계 허브. 얇은 전기 펄스와 비교적 밝은 고역.
-  1: { tempo: 1.08, bass: .94, lead: 1.04, pulse: .72, ambient: 650, hum: 61, upper: 122, motif: [1,1.125,1,1.25] },
-  // B동: 화물축. 느리고 무거운 컨베이어 리듬.
-  2: { tempo: .88, bass: .82, lead: .91, pulse: 1.18, ambient: 430, hum: 49, upper: 98, motif: [1,.944,1,.841] },
-  // C동: 공간 고정로. 금속성 불협과 빠른 기계 박동.
-  3: { tempo: 1.16, bass: 1.12, lead: 1.18, pulse: .88, ambient: 780, hum: 68, upper: 136.5, motif: [1,1.059,1.189,1.122] },
-  // D동: 기록보관구역. 비어 있는 고역과 간헐적 스캐너 톤.
-  4: { tempo: .96, bass: .73, lead: .78, pulse: 1.24, ambient: 560, hum: 55, upper: 165, motif: [1,1.5,1.334,1.125] },
-  // E-00: JANUS 코어. 저역 드론과 불안정한 반음계 펄스.
-  5: { tempo: 1.22, bass: .63, lead: .57, pulse: 1.38, ambient: 350, hum: 41.2, upper: 82.4, motif: [1,1.059,.944,1.122] }
-});
+const MUSIC_PROFILE = {tempo:1,bass:1,lead:1,pulse:1,ambient:520,hum:62,upper:124.5,motif:[1,1,1,1]};
 
 class AudioBus {
   constructor() {
@@ -1467,7 +798,7 @@ class AudioBus {
     this.sfxGain = null;
     this.weaponGain = null;
     this.impactGain = null;
-    this.dialogueGain = null;
+    
     this.ambienceGain = null;
     this.bgmGain = null;
     this.musicDuckGain = null;
@@ -1475,7 +806,7 @@ class AudioBus {
     this.musicMood = 'explore';
     this.musicMoodTarget = 'explore';
     this.musicMoodGate = 0;
-    this.storyTheme = 0;
+    
     this.duckReleaseTimer = null;
     this.volumes = { master: 1, sfx: 1, bgm: 1 };
   }
@@ -1498,7 +829,7 @@ class AudioBus {
     this.sfxGain = this.ctx.createGain();
     this.weaponGain = this.ctx.createGain();
     this.impactGain = this.ctx.createGain();
-    this.dialogueGain = this.ctx.createGain();
+    
     this.ambienceGain = this.ctx.createGain();
     this.bgmGain = this.ctx.createGain();
     this.musicDuckGain = this.ctx.createGain();
@@ -1529,7 +860,7 @@ class AudioBus {
     this.sfxGain.gain.setTargetAtTime(s * 1.55, t, .015);
     this.weaponGain.gain.setTargetAtTime(s * 2.65, t, .010);
     this.impactGain.gain.setTargetAtTime(s * 2.30, t, .010);
-    this.dialogueGain.gain.setTargetAtTime(s * 1.72, t, .020);
+    
     this.ambienceGain.gain.setTargetAtTime(this.volumes.bgm * .72, t, .035);
     this.bgmGain.gain.setTargetAtTime(this.volumes.bgm * 1.62, t, .035);
   }
@@ -1577,7 +908,7 @@ class AudioBus {
   startAmbience() {
     if (!this.enabled || !this.ctx || this.ambient) return;
     const t = this.ctx.currentTime;
-    const profile = STORY_MUSIC_PROFILES[this.storyTheme] || STORY_MUSIC_PROFILES[0];
+    const profile = MUSIC_PROFILE;
     const base = this.ctx.createOscillator();
     const upper = this.ctx.createOscillator();
     const wobble = this.ctx.createOscillator();
@@ -1611,16 +942,7 @@ class AudioBus {
     osc.connect(g).connect(dest || this.sfxDestination());
     osc.start(t); osc.stop(t + dur + .04);
   }
-  setStoryTheme(chapterId = 0) {
-    this.storyTheme = clamp(Number(chapterId) || 0, 0, 5);
-    const profile = STORY_MUSIC_PROFILES[this.storyTheme] || STORY_MUSIC_PROFILES[0];
-    if (this.ambient && this.ctx) {
-      const t = this.ctx.currentTime;
-      this.ambient.filter?.frequency.setTargetAtTime(profile.ambient || 520, t, .8);
-      this.ambient.osc?.frequency.setTargetAtTime(profile.hum || 62, t, .8);
-      this.ambient.upper?.frequency.setTargetAtTime(profile.upper || 124.5, t, .8);
-    }
-  }
+  
   duckMusic(level = .5, hold = .12, release = .35) {
     if (!this.ctx || !this.musicDuckGain) return;
     const t = this.ctx.currentTime;
@@ -1629,49 +951,15 @@ class AudioBus {
     this.musicDuckGain.gain.setTargetAtTime(target, t, .012);
     this.musicDuckGain.gain.setTargetAtTime(1, t + Math.max(.02, hold), Math.max(.04, release));
   }
-  radioCue(speaker = '') {
-    const dest = this.dialogueDestination();
-    this.beep(speaker.includes('한민석') ? 310 : 620, .045, 'square', .022, speaker.includes('한민석') ? 180 : 920, dest);
-    setTimeout(() => this.noise(.065, .018, 'bandpass', 1700, dest), 35);
-  }
-  storyStinger(kind = 'info') {
+  
+  missionStinger(kind = 'info') {
     const dest = this.dialogueDestination();
     const danger = kind === 'danger';
     this.beep(danger ? 118 : 420, danger ? .22 : .14, 'sawtooth', danger ? .048 : .034, danger ? 52 : 680, dest);
     setTimeout(() => this.beep(danger ? 82 : 620, .18, 'triangle', .028, danger ? 45 : 920, dest), 75);
     this.duckMusic(danger ? .28 : .42, .24, .55);
   }
-  storyObjectCue(role = 'machine', phase = 'complete') {
-    if (!this.enabled || !this.ctx) return;
-    const d = this.dialogueDestination();
-    const complete = phase === 'complete';
-    if (role === 'blastDoor' || role === 'citadelDoor') {
-      this.noise(.30, complete ? .070 : .042, 'lowpass', 330, d);
-      this.beep(92, .28, 'sawtooth', .034, 48, d);
-      setTimeout(() => this.noise(.10, .035, 'highpass', 1500, d), 150);
-    } else if (role === 'cargo' || role === 'cargoZone') {
-      this.beep(132, .09, 'square', .035, 82, d);
-      setTimeout(() => this.beep(196, .07, 'triangle', .020, 118, d), 95);
-      this.noise(.09, .045, 'bandpass', 720, d);
-    } else if (role === 'survivor' || role === 'exit') {
-      this.beep(310, .055, 'triangle', .020, 420, d);
-      setTimeout(() => this.beep(420, .07, 'sine', .018, 620, d), 80);
-    } else if (role === 'beacon' || role === 'scanner') {
-      this.beep(520, .16, 'sine', .028, 1040, d);
-      setTimeout(() => this.beep(780, .22, 'triangle', .018, 390, d), 130);
-    } else if (role === 'relay' || role === 'generator') {
-      this.noise(.10, .030, 'highpass', 2300, d);
-      this.beep(180, .11, 'square', .030, 360, d);
-      setTimeout(() => this.beep(720, .10, 'triangle', .024, 1080, d), 85);
-    } else if (role === 'core') {
-      this.beep(74, .34, 'sawtooth', .055, 31, d);
-      this.noise(.20, .060, 'bandpass', 520, d);
-    } else {
-      this.beep(240, .12, 'triangle', .028, 480, d);
-      setTimeout(() => this.noise(.08, .025, 'bandpass', 1100, d), 55);
-    }
-    this.duckMusic(.34, .35, .65);
-  }
+  
   setMusicMood(mood = 'explore') {
     if (!['explore', 'combat', 'danger'].includes(mood)) mood = 'explore';
     this.musicMoodTarget = mood;
@@ -1727,7 +1015,7 @@ class AudioBus {
     const scheduleBar = () => {
       if (!this.enabled || !this.ctx || !this.bgm) return;
       const mood = this.musicMood || 'explore';
-      const profile = STORY_MUSIC_PROFILES[this.storyTheme] || STORY_MUSIC_PROFILES[0];
+      const profile = MUSIC_PROFILE;
       const base = this.ctx.currentTime + .035;
       const bass = mood === 'danger' ? bassDanger : (mood === 'combat' ? bassCombat : bassExplore);
       const lead = mood === 'danger' ? leadDanger : (mood === 'combat' ? leadCombat : leadExplore);
@@ -1915,28 +1203,9 @@ class MiniMap {
     }
     ctx.fillStyle = 'rgba(85,215,255,.92)';
     for (const p of game.pickups) if (p.alive) { ctx.fillRect(tx(p.x)-2, tz(p.z)-2, 4, 4); }
-    if (game.runMode === 'story') {
-      const drawStoryMark = (x, z, role = 'target', secondary = false) => {
-        const px = tx(x), pz = tz(z);
-        ctx.save(); ctx.translate(px,pz);
-        ctx.lineWidth = secondary ? 1.2 : 1.8;
-        ctx.strokeStyle = secondary ? 'rgba(100,230,155,.95)' : 'rgba(255,221,85,.98)';
-        ctx.fillStyle = secondary ? 'rgba(75,215,135,.88)' : 'rgba(255,201,55,.92)';
-        if (role === 'survivor' || role === 'exit') { ctx.beginPath(); ctx.arc(0,-2,2.1,0,Math.PI*2); ctx.fill(); ctx.fillRect(-1.4,0,2.8,4); }
-        else if (role === 'generator') { ctx.beginPath(); ctx.moveTo(-2.5,-4); ctx.lineTo(1,-4); ctx.lineTo(-.4,-.5); ctx.lineTo(2.8,-.5); ctx.lineTo(-2.2,4); ctx.lineTo(-.5,1); ctx.lineTo(-3,1); ctx.closePath(); ctx.fill(); }
-        else if (role === 'cargo' || role === 'cargoZone') { ctx.strokeRect(-3.2,-3.2,6.4,6.4); if (role === 'cargo') ctx.fillRect(-1.8,-1.8,3.6,3.6); }
-        else if (role === 'scanner') { ctx.beginPath(); ctx.arc(0,0,4,0,Math.PI*2); ctx.stroke(); ctx.beginPath(); ctx.arc(0,0,1.5,0,Math.PI*2); ctx.fill(); }
-        else if (role === 'beacon') { ctx.beginPath(); ctx.moveTo(0,-4); ctx.lineTo(4,3); ctx.lineTo(-4,3); ctx.closePath(); ctx.stroke(); }
-        else { ctx.rotate(Math.PI/4); ctx.fillRect(-3,-3,6,6); }
-        ctx.restore();
-      };
-      const m = game.currentMission;
-      for (const o of game.storyObjects || []) {
-        const destinationActive = (m?.type === 'cargo' && game.storySequence?.cargoAttached && o.role === 'cargoZone') || (m?.type === 'rescue' && game.storySequence?.rescued && o.role === 'exit');
-        if ((o.active && !o.done && !o.door) || destinationActive) drawStoryMark(o.x,o.z,o.role,destinationActive);
-      }
-      for (const c of game.objectiveCores || []) if (c.alive) drawStoryMark(c.x,c.z,'core',false);
-    }
+    
+    for(const t of game.missionState?.targets || []){if(t.done)continue;ctx.strokeStyle='#73efd1';ctx.lineWidth=2;ctx.beginPath();ctx.arc(tx(t.x),tz(t.z),game.currentMission?.type==='holdout'?6:3.5,0,Math.PI*2);ctx.stroke();}
+    for(const c of game.objectiveCores || [])if(c.alive){ctx.fillStyle='#ff7849';ctx.fillRect(tx(c.x)-3,tz(c.z)-3,6,6);}
     ctx.save();
     ctx.translate(tx(game.player.x), tz(game.player.z));
     ctx.rotate(-game.yaw);
@@ -1968,8 +1237,7 @@ class Game {
     this.controlsSettingsReturn = 'start';
     this.loadInputPreferences();
     this.audio = new AudioBus();
-    // v37부터 실행본은 완전한 오프라인 1인용이다. 서버/Socket.IO 연결을 시도하지 않는다.
-    this.net = { enabled: false, connected: false, socket: null, pingMs: null, sendInput() {}, sendAction() { return false; } };
+        this.net = new NetAdapter(this, UI);
     this.clock = new THREE.Clock();
     this.tmpV = new THREE.Vector3();
     this.tmpDir = new THREE.Vector3();
@@ -2002,24 +1270,14 @@ class Game {
     this.frameNumber = 0;
     this.bestStats = this.loadBestStats();
     this.career = this.loadCareer();
-    this.storyProgress = this.loadStoryProgress();
-    this.menuMode = this.loadMenuMode();
+    
+    this.menuMode = 'survival';
     this.survivalMapKey = this.loadSurvivalMapKey();
     this.runMode = 'survival';
-    this.storyChapterId = clamp(Number(this.storyProgress.selected) || 1, 1, STORY_CHAPTERS.length);
-    this.storyChapter = storyChapterById(this.storyChapterId);
-    this.storyPrimaryAction = null;
-    this.storySecondaryAction = null;
-    this.dialogueQueue = [];
-    this.dialogueActive = null;
-    this.dialogueTimer = 0;
-    this.storyCinematicState = null;
-    this.storyCinematicQueue = [];
-    this.pauseAfterStoryCinematic = false;
+
     this.modeTransitioning = false;
     this.suppressAutoPauseUntil = 0;
-    this.storyMarkerVec = new THREE.Vector3();
-    this.storyTargetMarkerState = null;
+
     this.accessibility = {
       fov: 72,
       cameraMotion: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'reduced' : 'full',
@@ -2029,22 +1287,18 @@ class Game {
     this.minimap = new MiniMap(UI.minimap);
     this.lobby = { mode: 'single', role: 'solo', roomCode: '', ready: false, remoteReady: false, remoteSeen: false };
     this.remotePlayers = new Map();
-    this.lobbyChannel = null;
+    this.connectionBlocked = false;
     this.setupRenderer();
     this.bindUI();
     this.mobile = new MobileController(this, this.input);
     this.setInputMode(this.inputMode, false);
-    this.setMenuMode(this.menuMode, false);
+    this.renderLevelGuide();
     this.buildWeaponUI();
     window.addEventListener('resize', () => this.drawStartMapPreview());
     this.loop = this.loop.bind(this);
     requestAnimationFrame(this.loop);
     this.finishBootLoading();
-  }
-
-  loadMenuMode() {
-    try { return (localStorage.getItem('bhfps_menu_mode_v54') || localStorage.getItem('bhfps_menu_mode_v52') || localStorage.getItem('bhfps_menu_mode_v51') || localStorage.getItem('bhfps_menu_mode_v50')) === 'story' ? 'story' : 'survival'; }
-    catch (_) { return 'survival'; }
+    setTimeout(()=>this.net.restoreSession(),0);
   }
 
   loadSurvivalMapKey() {
@@ -2059,209 +1313,6 @@ class Game {
     this.survivalMapKey = key;
     try { localStorage.setItem('bhfps_survival_map_v54', key); } catch (_) {}
     return key;
-  }
-
-  loadStoryProgress() {
-    const fallback = { unlocked: 1, selected: 1, completed: [], bestScores: {}, bestDifficulty: {} };
-    try {
-      const saved = JSON.parse(localStorage.getItem('bhfps_story_v54') || localStorage.getItem('bhfps_story_v52') || localStorage.getItem('bhfps_story_v51') || localStorage.getItem('bhfps_story_v50') || '{}') || {};
-      const completed = Array.isArray(saved.completed)
-        ? [...new Set(saved.completed.map(Number).filter(id => id >= 1 && id <= STORY_CHAPTERS.length))]
-        : [];
-      return {
-        unlocked: clamp(Number(saved.unlocked) || 1, 1, STORY_CHAPTERS.length),
-        selected: clamp(Number(saved.selected) || 1, 1, STORY_CHAPTERS.length),
-        completed,
-        bestScores: saved.bestScores && typeof saved.bestScores === 'object' ? saved.bestScores : {},
-        bestDifficulty: saved.bestDifficulty && typeof saved.bestDifficulty === 'object' ? saved.bestDifficulty : {}
-      };
-    } catch (_) { return fallback; }
-  }
-
-  saveStoryProgress() {
-    try { localStorage.setItem('bhfps_story_v54', JSON.stringify(this.storyProgress)); } catch (_) {}
-    this.renderStoryMenu();
-  }
-
-  getStoryChapter(id = this.storyChapterId) {
-    return storyChapterById(id);
-  }
-
-  setMenuMode(mode = 'survival', persist = true) {
-    const previousMode = this.menuMode;
-    if (previousMode !== 'story' && UI.map && SURVIVAL_MAP_KEYS.includes(UI.map.value)) this.rememberSurvivalMapKey(UI.map.value);
-    this.menuMode = mode === 'story' ? 'story' : 'survival';
-    if (persist) { try { localStorage.setItem('bhfps_menu_mode_v54', this.menuMode); } catch (_) {} }
-    const story = this.menuMode === 'story';
-    UI.survivalModeBtn?.classList.toggle('active', !story);
-    UI.storyModeBtn?.classList.toggle('active', story);
-    UI.survivalModeBtn?.setAttribute('aria-selected', story ? 'false' : 'true');
-    UI.storyModeBtn?.setAttribute('aria-selected', story ? 'true' : 'false');
-    UI.survivalMenuPanel?.classList.toggle('hidden', story);
-    UI.storyMenuPanel?.classList.toggle('hidden', !story);
-    document.body.classList.toggle('story-menu-mode', story);
-    if (UI.map) UI.map.disabled = story;
-    if (UI.startWave) UI.startWave.disabled = story;
-    if (story) {
-      this.selectStoryChapter(Math.min(this.storyChapterId || 1, this.storyProgress.unlocked || 1), false);
-      this.renderStoryMenu();
-    } else {
-      this.runMode = 'survival';
-      this.storyChapter = null;
-      const survivalMap = SURVIVAL_MAP_KEYS.includes(this.survivalMapKey) ? this.survivalMapKey : 'box';
-      if (UI.map) UI.map.value = survivalMap;
-      if (UI.startWave && !UI.startWave.value) UI.startWave.value = '1';
-      this.drawStartMapPreview();
-    }
-  }
-
-  renderStoryMenu() {
-    if (!UI.storyChapterList) return;
-    const unlocked = clamp(Number(this.storyProgress.unlocked) || 1, 1, STORY_CHAPTERS.length);
-    if (this.storyChapterId > unlocked) this.storyChapterId = unlocked;
-    const completed = new Set(this.storyProgress.completed || []);
-    UI.storyChapterList.innerHTML = '';
-    for (const chapter of STORY_CHAPTERS) {
-      const locked = chapter.id > unlocked;
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = `story-chapter-card${chapter.id === this.storyChapterId ? ' selected' : ''}${completed.has(chapter.id) ? ' completed' : ''}${locked ? ' locked' : ''}`;
-      button.disabled = locked;
-      button.dataset.chapterId = String(chapter.id);
-      button.innerHTML = `<small>${chapter.code}</small><b>${chapter.id}. ${chapter.title}</b><span>${MAPS[chapter.map]?.label || chapter.map}<br>${chapter.waves}개 작전 단계</span>`;
-      button.addEventListener('click', () => this.selectStoryChapter(chapter.id));
-      UI.storyChapterList.appendChild(button);
-    }
-    const chapter = this.getStoryChapter(this.storyChapterId);
-    const clearCount = completed.size;
-    if (UI.storyProgressSummary) UI.storyProgressSummary.textContent = `격리 작전 ${clearCount}/${STORY_CHAPTERS.length} 완료 · Chapter ${unlocked}까지 해금`;
-    if (UI.storySelectedSummary) {
-      const best = Math.max(0, Number(this.storyProgress.bestScores?.[chapter.id]) || 0);
-      UI.storySelectedSummary.innerHTML = `<b>Chapter ${chapter.id} · ${chapter.title}</b><span>${chapter.goal}${best ? ` · 최고 점수 ${best.toLocaleString('ko-KR')}` : ''}</span>`;
-    }
-    if (UI.storyStartBtn) {
-      UI.storyStartBtn.disabled = chapter.id > unlocked;
-      UI.storyStartBtn.textContent = completed.has(chapter.id) ? '챕터 다시 플레이 · 브리핑' : '선택한 챕터 브리핑';
-    }
-  }
-
-  selectStoryChapter(id = 1, persist = true) {
-    const unlocked = clamp(Number(this.storyProgress.unlocked) || 1, 1, STORY_CHAPTERS.length);
-    const next = clamp(Number(id) || 1, 1, unlocked);
-    this.storyChapterId = next;
-    this.storyChapter = this.getStoryChapter(next);
-    this.storyProgress.selected = next;
-    if (persist) this.saveStoryProgress();
-    else this.renderStoryMenu();
-    if (UI.startWave) UI.startWave.value = '1';
-    this.drawStartMapPreview();
-  }
-
-  storyLoadoutLabel(chapter = this.getStoryChapter()) {
-    return (chapter.loadout || []).map(id => WEAPON_DEFS.find(weapon => weapon.id === id)?.name || id.toUpperCase()).join(' · ');
-  }
-
-  renderStoryObjectives(chapter, complete = false) {
-    if (!UI.storyScreenObjectives) return;
-    if (complete) {
-      UI.storyScreenObjectives.innerHTML = [
-        ['✓', `${chapter.waves}개 작전 단계 완료`],
-        ['⌁', `점수 ${(this.score || 0).toLocaleString('ko-KR')} · 처치 ${this.kills || 0}`],
-        ['▣', `${MAPS[chapter.map]?.label || chapter.map} 격리 기록 저장`]
-      ].map(([icon, text]) => `<div class="story-objective-row"><i>${icon}</i><span>${text}</span></div>`).join('');
-      return;
-    }
-    UI.storyScreenObjectives.innerHTML = chapter.missions.map((mission, index) =>
-      `<div class="story-objective-row"><i>${index + 1}</i><span>${mission.label} · ${mission.hud}</span></div>`
-    ).join('');
-  }
-
-  openStoryBriefing(chapterId = this.storyChapterId) {
-    const unlocked = Number(this.storyProgress.unlocked) || 1;
-    if (Number(chapterId) > unlocked) { this.showToast('이전 챕터를 먼저 완료해야 합니다.'); return; }
-    this.setMenuMode('story');
-    this.selectStoryChapter(chapterId);
-    const chapter = this.getStoryChapter(chapterId);
-    UI.start?.classList.remove('show');
-    UI.storyScreenEyebrow.textContent = `${chapter.code} · STORY BRIEFING`;
-    UI.storyScreenTitle.textContent = `Chapter ${chapter.id} · ${chapter.title}`;
-    UI.storyScreenCopy.textContent = chapter.intro;
-    this.renderStoryObjectives(chapter, false);
-    UI.storyScreenStatus.textContent = `작전 목표: ${chapter.goal}\n지급 장비: ${this.storyLoadoutLabel(chapter)} · 난이도 ${String(UI.diff?.value || 'normal').toUpperCase()}`;
-    UI.storyPrimaryBtn.textContent = '임무 시작';
-    UI.storySecondaryBtn.textContent = '챕터 선택으로';
-    this.storyPrimaryAction = () => this.startStoryChapter(chapter.id);
-    this.storySecondaryAction = () => this.closeStoryScreenToMenu();
-    UI.storyScreen?.classList.add('show');
-  }
-
-  closeStoryScreenToMenu() {
-    this.clearStoryRuntimeState(true);
-    UI.storyScreen?.classList.remove('show');
-    UI.hud?.classList.add('hidden');
-    UI.start?.classList.add('show');
-    this.setMenuMode('story', false);
-    this.renderStoryMenu();
-  }
-
-  startStoryChapter(chapterId = this.storyChapterId) {
-    this.selectStoryChapter(chapterId);
-    this.runMode = 'story';
-    this.storyChapter = this.getStoryChapter(chapterId);
-    if (UI.startWave) UI.startWave.value = '1';
-    UI.storyScreen?.classList.remove('show');
-    this.startFromMenu();
-  }
-
-  applyStoryLoadout() {
-    if (this.runMode !== 'story' || !this.storyChapter) return;
-    for (const id of this.storyChapter.loadout || ['pistol']) {
-      const weapon = this.getWeapon(id);
-      if (!weapon) continue;
-      this.unlocked.add(id);
-      if (Number.isFinite(weapon.ammoMax)) this.ammo[id] = Math.max(this.ammo[id] || 0, Math.ceil(weapon.ammoMax * .62));
-      if (weapon.magSize) this.mag[id] = weapon.magSize;
-    }
-    this.medkits = Math.min(this.maxMedkits, 22 + (this.storyChapter.id - 1) * 4);
-  }
-
-  completeStoryChapter() {
-    if (this.runMode !== 'story' || !this.storyChapter || this.runEnded) return;
-    const chapter = this.storyChapter;
-    this.runEnded = true;
-    this.runOutcome = 'story-complete';
-    this.running = false;
-    this.gameOver = false;
-    this.rewardOpen = false;
-    this.prepPhase = false;
-    this.mobile?.setGameplayActive(false);
-    document.getElementById('story-survivor-health')?.classList.remove('show', 'hurt');
-    try { document.exitPointerLock?.(); } catch (_) {}
-    this.audio.stopAll();
-    UI.hud?.classList.add('hidden');
-    UI.reward?.classList.remove('show');
-    const completed = new Set(this.storyProgress.completed || []);
-    completed.add(chapter.id);
-    this.storyProgress.completed = [...completed].sort((a,b) => a-b);
-    this.storyProgress.unlocked = Math.max(this.storyProgress.unlocked || 1, Math.min(STORY_CHAPTERS.length, chapter.id + 1));
-    this.storyProgress.selected = Math.min(STORY_CHAPTERS.length, chapter.id + 1);
-    this.storyProgress.bestScores[chapter.id] = Math.max(Number(this.storyProgress.bestScores[chapter.id]) || 0, this.score || 0);
-    this.storyProgress.bestDifficulty[chapter.id] = UI.diff?.value || 'normal';
-    this.saveStoryProgress();
-
-    UI.storyScreenEyebrow.textContent = chapter.id === STORY_CHAPTERS.length ? 'STORY COMPLETE' : `${chapter.code} · MISSION COMPLETE`;
-    UI.storyScreenTitle.textContent = chapter.id === STORY_CHAPTERS.length ? '격리 작전 완료' : `Chapter ${chapter.id} 완료`;
-    UI.storyScreenCopy.textContent = chapter.ending;
-    this.renderStoryObjectives(chapter, true);
-    const next = STORY_CHAPTERS.find(item => item.id === chapter.id + 1);
-    UI.storyScreenStatus.textContent = next
-      ? `다음 작전 해금: Chapter ${next.id} · ${next.title}`
-      : '모든 챕터를 완료했습니다. 챕터 선택에서 원하는 작전을 다시 플레이할 수 있습니다.';
-    UI.storyPrimaryBtn.textContent = next ? '다음 챕터 브리핑' : '스토리 챕터 선택';
-    UI.storySecondaryBtn.textContent = '현재 챕터 다시 플레이';
-    this.storyPrimaryAction = () => next ? this.openStoryBriefing(next.id) : this.closeStoryScreenToMenu();
-    this.storySecondaryAction = () => this.openStoryBriefing(chapter.id);
-    UI.storyScreen?.classList.add('show');
   }
 
   finishBootLoading() {
@@ -2280,51 +1331,20 @@ class Game {
       if (index < steps.length) setTimeout(advance, index === 1 ? 90 : 150);
       else setTimeout(() => {
         UI.loading?.classList.add('leaving');
-        UI.start?.classList.add('show');
+        if(!this.running && !this.gameOver)UI.start?.classList.add('show');
         setTimeout(() => UI.loading?.classList.remove('show', 'leaving'), 480);
       }, 260);
     };
     requestAnimationFrame(() => requestAnimationFrame(advance));
   }
 
-  setupLobbyChannel() {
-    try {
-      this.lobbyChannel = 'BroadcastChannel' in window ? new BroadcastChannel('boxhead-lowpoly-fps-lobby') : null;
-      if (this.lobbyChannel) {
-        this.lobbyChannel.onmessage = (ev) => this.handleLobbyMessage(ev.data || {});
-      }
-    } catch (_) { this.lobbyChannel = null; }
-  }
-
-  sendLobbyMessage(msg = {}) {
-    const payload = { ...msg, roomCode: this.lobby.roomCode, sender: this.lobby.playerId || 'local', time: Date.now() };
-    try { this.lobbyChannel?.postMessage(payload); } catch (_) {}
-    try { localStorage.setItem('bhfps_room_' + payload.roomCode, JSON.stringify(payload)); } catch (_) {}
-  }
-
-  handleLobbyMessage(msg = {}) {
-    if (!msg || !this.lobby?.roomCode || msg.roomCode !== this.lobby.roomCode || msg.sender === this.lobby.playerId) return;
-    if (msg.type === 'hello' || msg.type === 'ready') {
-      this.lobby.remoteSeen = true;
-      this.lobby.remoteReady = !!msg.ready;
-      if (this.lobby.role === 'host') this.sendLobbyMessage({ type: 'ready', ready: this.lobby.ready, role: this.lobby.role });
-      this.updateLobbyUI();
-    }
-    if (msg.type === 'start' && this.lobby.role === 'guest') {
-      if (msg.map) UI.map.value = msg.map;
-      if (msg.diff) UI.diff.value = msg.diff;
-      if (msg.quality) UI.quality.value = msg.quality;
-      if (msg.startWave) UI.startWave.value = String(msg.startWave);
-      this.startFromMenu(true);
-    }
-  }
-
-  setPlayMode(mode = 'single') {
-    this.lobby.mode = mode;
-    if (UI.playMode) UI.playMode.value = mode;
-    UI.singleModeBtn?.classList.toggle('active', mode === 'single');
-    UI.coopModeBtn?.classList.toggle('active', mode === 'coop');
-    UI.multiplayerPanel?.classList.toggle('hidden', mode !== 'coop');
+  setPlayMode(mode='single') {
+    this.lobby.mode=mode==='coop'?'coop':'single';
+    if(UI.playMode)UI.playMode.value=this.lobby.mode;
+    UI.singleModeBtn?.classList.toggle('active',this.lobby.mode==='single');UI.coopModeBtn?.classList.toggle('active',this.lobby.mode==='coop');
+    UI.singleModeBtn?.setAttribute('aria-selected',String(this.lobby.mode==='single'));UI.coopModeBtn?.setAttribute('aria-selected',String(this.lobby.mode==='coop'));
+    UI.multiplayerPanel?.classList.toggle('hidden',this.lobby.mode!=='coop');
+    if(this.lobby.mode==='coop')this.net.connect();
     this.updateLobbyUI();
   }
 
@@ -2336,60 +1356,32 @@ class Game {
     return { map: SURVIVAL_MAP_KEYS.includes(UI.map.value) ? UI.map.value : this.survivalMapKey, diff: UI.diff.value, quality: UI.quality.value, startWave: UI.startWave.value };
   }
 
-  createRoom() {
-    if (this.net?.createRoom?.(this.currentMenuSettings())) return;
-    this.lobby = { mode: 'coop', role: 'host', roomCode: this.randomRoomCode(), ready: false, remoteReady: false, remoteSeen: false, playerId: 'host-' + Math.random().toString(36).slice(2, 8) };
-    if (UI.roomCodeInput) UI.roomCodeInput.value = this.lobby.roomCode;
-    this.sendLobbyMessage({ type: 'hello', ready: false, role: 'host' });
-    this.updateLobbyUI('방을 만들었다. 상대가 같은 주소에서 방 코드로 입장한 뒤 준비하면 시작할 수 있다.');
-  }
+  createRoom() { this.net.createRoom(this.currentMenuSettings()); }
 
   joinRoom() {
-    const code = (UI.roomCodeInput?.value || '').trim().toUpperCase();
-    if (!code) { this.updateLobbyUI('입장할 방 코드를 입력해야 한다.'); return; }
-    if (this.net?.joinRoom?.(code)) return;
-    this.lobby = { mode: 'coop', role: 'guest', roomCode: code, ready: false, remoteReady: false, remoteSeen: false, playerId: 'guest-' + Math.random().toString(36).slice(2, 8) };
-    this.sendLobbyMessage({ type: 'hello', ready: false, role: 'guest' });
-    this.updateLobbyUI('방에 입장했다. 준비를 누르면 호스트가 시작할 수 있다.');
+    const code=(UI.roomCodeInput?.value || '').trim().toUpperCase();
+    if(!/^[A-Z0-9]{6}$/.test(code)){this.updateLobbyUI('친구에게 받은 6자리 방 코드를 입력하세요.');return;}
+    this.net.joinRoom(code);
   }
 
-  toggleReady() {
-    if (this.lobby.mode !== 'coop' || !this.lobby.roomCode) { this.updateLobbyUI('먼저 방을 만들거나 입장해야 한다.'); return; }
-    const nextReady = !this.lobby.ready;
-    if (this.net?.setReady?.(nextReady)) { this.lobby.ready = nextReady; this.updateLobbyUI('서버에 준비 상태를 전송했다.'); return; }
-    this.lobby.ready = nextReady;
-    this.sendLobbyMessage({ type: 'ready', ready: this.lobby.ready, role: this.lobby.role });
-    this.updateLobbyUI();
-  }
+  toggleReady() { if(this.lobby.roomCode && this.net.connected)this.net.setReady(!this.lobby.ready); }
 
-  canStartCoop() {
-    if (this.lobby.mode !== 'coop') return true;
-    // 정식 온라인 동기화 전까지는 호스트가 둘 다 준비된 로비를 시작한다.
-    // BroadcastChannel이 없거나 한 탭 테스트인 경우를 위해 Ctrl을 누른 상태에서는 강제 테스트 시작을 허용한다.
-    return this.lobby.role === 'host' && this.lobby.ready && this.lobby.remoteReady;
-  }
+  canStartCoop() { return this.net.connected && this.lobby.role==='host' && this.lobby.ready && this.lobby.remoteReady && this.lobby.remoteConnected && this.net.room?.phase==='lobby'; }
 
-  updateLobbyUI(extra = '') {
-    if (!UI.lobbyRoomCode || !UI.lobbyStatus) return;
-    const room = this.lobby.roomCode ? `방 코드: ${this.lobby.roomCode}` : '방 없음';
-    UI.lobbyRoomCode.textContent = room;
-    if (UI.readyBtn) {
-      UI.readyBtn.disabled = this.lobby.mode !== 'coop' || !this.lobby.roomCode;
-      UI.readyBtn.textContent = this.lobby.ready ? '준비 취소' : '준비';
-    }
-    if (UI.startBtn) {
-      if (this.lobby.mode === 'coop') {
-        UI.startBtn.textContent = this.lobby.role === 'guest' ? '호스트 시작 대기' : '2인 플레이 시작';
-        UI.startBtn.disabled = !this.canStartCoop();
-      } else {
-        UI.startBtn.textContent = '빠른 시작';
-        UI.startBtn.disabled = false;
-      }
-    }
-    const roleText = this.lobby.role === 'host' ? '호스트' : (this.lobby.role === 'guest' ? '게스트' : '솔로');
-    const remote = this.lobby.remoteSeen ? (this.lobby.remoteReady ? '상대 준비 완료' : '상대 대기 중') : '상대 미입장';
-    const self = this.lobby.ready ? '내 준비 완료' : '내 준비 대기';
-    UI.lobbyStatus.textContent = extra || `역할: ${roleText} · ${self} · ${remote}. 서버 연결 시 방/입장/준비/동시 시작이 실제 Socket.IO 서버로 동작한다. 현재는 상대 위치·방향·무기 표시까지 동기화한다.`;
+  updateLobbyUI(extra='') {
+    if(!this.lobby || !UI.lobbyRoomCode)return;
+    const coop=this.lobby.mode==='coop', inRoom=!!this.lobby.roomCode, connected=this.net?.connected;
+    UI.lobbyRoomCode.textContent=inRoom?this.lobby.roomCode:'— — — — — —';
+    if(UI.readyBtn){UI.readyBtn.disabled=!inRoom||!connected||this.net.room?.phase!=='lobby';UI.readyBtn.textContent=this.lobby.ready?'준비 취소':'준비하기';}
+    if(UI.createRoomBtn)UI.createRoomBtn.disabled=!connected || inRoom;
+    if(UI.joinRoomBtn)UI.joinRoomBtn.disabled=!connected || inRoom;
+    if(UI.leaveRoomBtn)UI.leaveRoomBtn.disabled=!inRoom;
+    if(UI.copyInviteBtn)UI.copyInviteBtn.disabled=!inRoom;
+    UI.startBtn.textContent=coop?(this.lobby.role==='guest'?'호스트 시작 대기':'협동 플레이 시작'):'싱글플레이 시작';
+    UI.startBtn.disabled=coop && !this.canStartCoop();
+    for(const select of [UI.map,UI.diff,UI.startWave])if(select)select.disabled=coop && inRoom && (this.lobby.role==='guest' || this.lobby.ready || this.net.room?.phase!=='lobby');
+    if(UI.lobbyStatus)UI.lobbyStatus.textContent=extra || (inRoom?(!this.lobby.remoteSeen?'친구의 입장을 기다리고 있습니다.':this.canStartCoop()?'두 사람 준비 완료. 호스트가 시작할 수 있습니다.':'두 사람 모두 준비하기를 눌러주세요.'):'방 만들기 → 친구 입장 → 두 사람 준비 → 시작');
+    if(UI.lobbyPlayers){UI.lobbyPlayers.replaceChildren();const list=this.net?.room?.players || [];for(let i=0;i<2;i++){const p=list[i],row=document.createElement('div');row.className='lobby-player'+(p?.ready?' ready':'');row.textContent=p?((p.id===this.net.socket?.id?'나':'친구')+' · '+(p.role==='host'?'호스트':'게스트')+' · '+(!p.connected?'재접속 중':p.ready?'준비 완료':'준비 대기')):'친구를 초대하세요';UI.lobbyPlayers.append(row);}}
   }
 
   loadInputPreferences() {
@@ -2438,7 +1430,7 @@ class Game {
     this.input.setTouchMode(this.effectiveInputMode === 'touch');
     document.body.classList.toggle('mobile-keyboard-mode', touchCapable && this.effectiveInputMode === 'keyboard');
     this.syncInputSettingUI();
-    this.mobile?.setGameplayActive(this.running && !this.paused && !this.gameOver && !this.isStoryControlLocked());
+    this.mobile?.setGameplayActive(this.running && !this.paused && !this.gameOver);
     if (persist) this.saveInputPreferences();
   }
 
@@ -2580,37 +1572,10 @@ class Game {
     }, 2900);
   }
 
-  clearStoryRuntimeState(clearActions = true) {
-    this.storyCinematicState = null;
-    this.storyCinematicQueue = [];
-    this.pauseAfterStoryCinematic = false;
-    this.storyInteractionHold = 0;
-    this.storyInteractionTarget = null;
-    this.storySequence = null;
-    this.dialogueQueue = [];
-    this.dialogueActive = null;
-    this.dialogueTimer = 0;
-    this.storyTargetMarkerState = null;
-    if (clearActions) {
-      this.storyPrimaryAction = null;
-      this.storySecondaryAction = null;
-    }
-    UI.storyDialogue?.classList.remove('show');
-    UI.storyTargetMarker?.classList.remove('show', 'offscreen', 'onscreen', 'turn-left', 'turn-right', 'behind');
-    this.storyTargetOffscreenSide = null;
-    this.storyTargetKey = '';
-    this.storyTargetLastScreenSide = null;
-    UI.storyCinematic?.classList.remove('show','cctv-feed','cctv-switch');
-    UI.storyCinematic?.setAttribute('aria-hidden', 'true');
-    UI.storyCinematic?.style.setProperty('--cinematic-progress', '0%');
-    const action = document.getElementById('story-action-overlay');
-    if (action) action.style.display = 'none';
-    const survivorHud = document.getElementById('story-survivor-health');
-    if (survivorHud) survivorHud.classList.remove('show', 'hurt');
-    this.storySurvivor = null;
-    this.storySurvivorHudTimer = 0;
-    document.body.classList.remove('story-sequence-active');
-    if (this.viewWeapon) this.viewWeapon.visible = true;
+  clearRunState() {
+    this.connectionBlocked=false;this.serverSuspended=false;this.cleanupMissionTargets();
+    UI.missionMarker?.classList.remove('show');UI.connectionOverlay?.classList.remove('show');
+    if(this.viewWeapon)this.viewWeapon.visible=true;
   }
 
   resetToMainMenuState() {
@@ -2631,12 +1596,12 @@ class Game {
     this._startGuard = false;
     this.runEnded = true;
     this.audio.stopAll();
-    this.clearStoryRuntimeState(true);
+    this.clearRunState();
     this.input.resetTransient();
     this.mobile?.setGameplayActive(false);
     document.body.classList.remove('mobile-playing', 'mobile-layout-edit');
     try { if (document.pointerLockElement) document.exitPointerLock?.(); } catch (_) {}
-    for (const panel of [UI.pause, UI.over, UI.reward, UI.storyScreen, UI.mobileSettings, UI.controlsSettings]) panel?.classList.remove('show');
+    for (const panel of [UI.pause, UI.over, UI.reward, UI.mobileSettings, UI.controlsSettings]) panel?.classList.remove('show');
     UI.loading?.classList.remove('show', 'leaving');
     UI.hud?.classList.add('hidden');
     UI.start?.classList.add('show');
@@ -2646,21 +1611,15 @@ class Game {
     }
     this.mainMenuConfirmUntil = 0;
     this.clock.getDelta();
-    // 기존 스토리 선택 화면은 유지하되, 생존 버튼을 즉시 누를 수 있는 완전한 메뉴 상태로 만든다.
-    this.setMenuMode(this.menuMode === 'story' ? 'story' : 'survival', false);
     this.drawStartMapPreview();
     this.modeTransitioning = false;
     requestAnimationFrame(() => this.input.resetTransient());
   }
 
   returnToMainMenu() {
-    this.resetToMainMenuState();
-    // 새로고침에 의존하지 않는다. 전체화면 해제 실패나 서비스워커 캐시 상태와 무관하게
-    // 같은 문서에서 스토리 → 생존 → 스토리를 반복해도 정상적으로 재초기화된다.
-    try {
-      const exit = document.fullscreenElement ? document.exitFullscreen?.() : null;
-      if (exit?.catch) exit.catch(() => {});
-    } catch (_) {}
+    if(this.lobby.mode==='coop'){this.net.leaveRoom();this.resetLobby();}
+    this.resetToMainMenuState();this.setConnectionBlocked(false);
+    try{document.fullscreenElement && document.exitFullscreen?.()?.catch?.(()=>{});}catch{}
   }
 
   setupRenderer() {
@@ -2691,20 +1650,22 @@ class Game {
 
   bindUI() {
     UI.survivalModeBtn?.addEventListener('click', () => this.setMenuMode('survival'));
-    UI.storyModeBtn?.addEventListener('click', () => this.setMenuMode('story'));
-    UI.storyPrimaryBtn?.addEventListener('click', () => this.storyPrimaryAction?.());
-    UI.storySecondaryBtn?.addEventListener('click', () => this.storySecondaryAction?.());
-    UI.singleModeBtn?.addEventListener('click', () => this.setPlayMode('single'));
+
+    UI.singleModeBtn?.addEventListener('click', () => { this.net.leaveRoom();this.resetLobby();this.setPlayMode('single'); });
     UI.coopModeBtn?.addEventListener('click', () => this.setPlayMode('coop'));
     UI.createRoomBtn?.addEventListener('click', () => this.createRoom());
     UI.joinRoomBtn?.addEventListener('click', () => this.joinRoom());
     UI.readyBtn?.addEventListener('click', () => this.toggleReady());
+    UI.leaveRoomBtn?.addEventListener('click',()=>{this.net.leaveRoom();this.resetLobby();});
+    UI.copyInviteBtn?.addEventListener('click',()=>this.copyInvite());
+    UI.prepReady?.addEventListener('click',()=>this.readyForNextLevel());
+    $('connection-leave')?.addEventListener('click',()=>this.returnToMainMenu());
+    for(const select of [UI.map,UI.diff,UI.startWave])select?.addEventListener('change',()=>{this.renderLevelGuide();this.net.updateSettings(this.currentMenuSettings());});
     UI.roomCodeInput?.addEventListener('input', () => { UI.roomCodeInput.value = UI.roomCodeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); });
     this.setPlayMode('single');
     this.setupSettingsUI();
     UI.map?.addEventListener('change', () => { this.rememberSurvivalMapKey(UI.map.value); this.drawStartMapPreview(); });
     this.drawStartMapPreview();
-    // 모바일 메뉴 스크롤이 생존/스토리 시작 버튼의 탭으로 오인되지 않게 한다.
     const beginFromMenu = (e) => {
       if (e) { e.preventDefault(); e.stopPropagation(); }
       this.runMode = 'survival';
@@ -2745,13 +1706,10 @@ class Game {
       });
     };
     bindSafeMenuTap(UI.startBtn, beginFromMenu);
-    bindSafeMenuTap(UI.storyStartBtn, (e) => {
-      if (e) { e.preventDefault(); e.stopPropagation(); }
-      this.openStoryBriefing(this.storyChapterId);
-    });
     const restartCurrentRun = (e) => {
+      if(this.lobby.mode==='coop'){this.net.returnToLobby();return;}
       if (e) { e.preventDefault(); e.stopPropagation(); }
-      if (this.runMode !== 'story') this.runMode = 'survival';
+      this.runMode = 'survival';
       this.startFromMenu();
     };
     UI.restartBtn.addEventListener('pointerdown', restartCurrentRun, { passive: false });
@@ -2802,31 +1760,25 @@ class Game {
         this.mobile?.closeSettings();
         return;
       }
-      if (UI.start.classList.contains('show') && (e.code === 'Enter' || e.code === 'Space')) {
+      if (UI.start.classList.contains('show') && !/INPUT|SELECT|TEXTAREA|BUTTON/.test(e.target?.tagName || '') && (e.code === 'Enter' || e.code === 'Space')) {
         e.preventDefault();
-        if (this.menuMode === 'story') this.openStoryBriefing(this.storyChapterId);
-        else { this.runMode = 'survival'; this.startFromMenu(); }
+        { this.runMode = 'survival'; this.startFromMenu(); }
         return;
       }
       if (e.code === 'Escape' && this.running && !this.gameOver) {
         e.preventDefault();
-        if (this.isStoryControlLocked()) {
-          this.pauseAfterStoryCinematic = !this.input.locked && !this.isTouchInputActive();
-          this.showToast('연출이 끝난 뒤 일시정지할 수 있습니다.');
-          return;
-        }
+        
         if (this.paused) this.resumeFromPause();
         else this.pause();
       }
     });
     canvas.addEventListener('click', () => {
-      if (this.running && !this.gameOver && !this.isStoryControlLocked()) this.input.requestLock();
+      if (this.running && !this.gameOver) this.input.requestLock();
     });
     document.addEventListener('pointerlockchange', () => {
       if (this.modeTransitioning || now() < (this.suppressAutoPauseUntil || 0)) return;
       if (!this.running || this.gameOver || this.paused || this.rewardOpen || this.input.locked || this.isTouchInputActive()) return;
-      if (this.isStoryControlLocked()) this.pauseAfterStoryCinematic = true;
-      else this.pause();
+      this.pause();
     });
   }
 
@@ -2976,7 +1928,7 @@ class Game {
     this.quality = QUALITY[this.effectiveQualityKey];
     if (previous !== this.effectiveQualityKey || !this.dynamicPixelRatio) this.dynamicPixelRatio = this.quality.pixelRatio;
     document.body.dataset.quality = this.effectiveQualityKey;
-    if (this.scene?.fog) this.scene.fog.far = this.quality.fogFar;
+    if (this.scene?.fog) if(this.scene.fog)this.scene.fog.far = this.quality.fogFar;
     if (this.renderer) {
       this.renderer.shadowMap.enabled = !!this.quality.shadows;
       this.renderer.sortObjects = !this.quality.simpleModels;
@@ -3099,7 +2051,7 @@ class Game {
       next.hp = hp;
       next.maxHp = maxHp;
       next.phase = phase;
-      return next;
+      next.serverId=c.serverId;return next;
     });
     this.buildViewWeapon();
 
@@ -3118,25 +2070,20 @@ class Game {
     this.setInputMode(this.inputMode, false);
     if (this.isTouchInputActive()) {
       this.mobile.requestLandscape();
-      this.mobile.setGameplayActive(!this.isStoryControlLocked());
+      this.mobile.setGameplayActive(true);
     } else {
       this.mobile?.requestLandscape();
       this.input.requestLock();
     }
   }
 
-  startFromMenu(fromNetwork = false) {
-    if (this._startGuard) return;
-    if (!fromNetwork && this.lobby.mode === 'coop') {
-      if (this.lobby.role === 'guest') { this.updateLobbyUI('게스트는 호스트가 시작할 때까지 기다려야 한다.'); return; }
-      if (!this.canStartCoop()) { this.updateLobbyUI('2인 플레이는 호스트와 게스트가 모두 준비해야 시작된다.'); return; }
-      const settings = this.currentMenuSettings();
-      if (this.net?.startGame?.(settings)) return;
-      this.sendLobbyMessage({ type: 'start', ...settings });
+  startFromMenu(fromNetwork=false) {
+    if(this._startGuard || this.modeTransitioning)return;
+    if(!fromNetwork && this.lobby.mode==='coop'){
+      if(!this.canStartCoop()){this.updateLobbyUI('친구가 입장한 뒤 두 사람 모두 준비해야 시작할 수 있습니다.');return;}
+      this.net.startGame(this.currentMenuSettings());return;
     }
-    this._startGuard = true;
-    this.start();
-    setTimeout(() => { this._startGuard = false; }, 260);
+    this._startGuard=true;this.start();setTimeout(()=>this._startGuard=false,260);
   }
 
   buildWeaponUI() {
@@ -3162,7 +2109,7 @@ class Game {
   start() {
     if (this.modeTransitioning) return;
     this.suppressAutoPauseUntil = now() + .75;
-    this.clearStoryRuntimeState(true);
+    this.clearRunState(true);
     this.input.resetTransient();
     this.audio.unlock();
     this.syncSettingsFromMenu();
@@ -3171,22 +2118,21 @@ class Game {
     this.running = true;
     this.paused = false;
     this.gameOver = false;
-    this.playMode = UI.playMode?.value || 'single';
-    this.runMode = this.runMode === 'story' ? 'story' : 'survival';
-    this.storyChapter = this.runMode === 'story' ? this.getStoryChapter(this.storyChapterId) : null;
-    this.audio.setStoryTheme(this.storyChapter?.id || 0);
+    this.playMode = this.lobby.mode;
+    this.runMode = ('survival');
+
     this.audio.startAmbience();
     this.audio.startBgm();
     const selectedSurvivalMap = SURVIVAL_MAP_KEYS.includes(UI.map?.value) ? UI.map.value : (SURVIVAL_MAP_KEYS.includes(this.survivalMapKey) ? this.survivalMapKey : 'box');
-    this.mapKey = this.storyChapter?.map || selectedSurvivalMap;
+    this.mapKey = selectedSurvivalMap;
     this.map = MAPS[this.mapKey] || MAPS.box;
-    if (this.runMode !== 'story') this.rememberSurvivalMapKey(this.mapKey);
+    this.rememberSurvivalMapKey(this.mapKey);
     this.diff = DIFFICULTY[UI.diff.value] || DIFFICULTY.normal;
     this.quality = QUALITY[this.effectiveQualityKey] || QUALITY.mid;
-    this.startWave = this.runMode === 'story' ? 1 : clamp(parseInt(UI.startWave?.value || '1', 10) || 1, 1, 99);
+    this.startWave = (clamp(parseInt(UI.startWave?.value || '1', 10) || 1, 1, 99));
     this.scene.fog.far = this.quality.fogFar;
     UI.start.classList.remove('show');
-    UI.storyScreen?.classList.remove('show');
+    
     UI.over.classList.remove('show');
     UI.pause.classList.remove('show');
     UI.reward?.classList.remove('show');
@@ -3201,14 +2147,12 @@ class Game {
       this.mobile?.requestLandscape();
       this.input.requestLock();
     }
-    this.showToast(this.runMode === 'story'
-      ? `Chapter ${this.storyChapter.id} · ${this.storyChapter.title}`
-      : `${this.map.label} / Wave ${this.wave} 시작`);
+    this.showToast((`${this.map.label} / Wave ${this.wave} 시작`));
   }
 
   pause() {
     if (!this.running || this.gameOver || this.paused) return;
-    this.paused = true;
+    this.paused = true;this.input.resetTransient();this.net.sendInput(true);
     if (UI.pauseQuality && UI.quality) UI.pauseQuality.value = UI.quality.value;
     this.syncSettingsFromMenu();
     try { if (document.pointerLockElement === canvas) document.exitPointerLock?.(); } catch (_) {}
@@ -3217,9 +2161,15 @@ class Game {
   }
 
   resetWorld() {
+    this.disposeWorld();
     while (this.scene.children.length) this.scene.remove(this.scene.children[0]);
     this.renderer.shadowMap.enabled = !!this.quality.shadows;
-    this.currentMapTheme = getMapTheme(this.mapKey) || null;
+    this.currentMapTheme = ({
+      lane:{bg:0x10151a,fog:0x23303a,floor:0x46515c,wall:0x788b99,ceiling:0x536572,hemiSky:0xcfe5ff,hemiGround:0x192734,lightPanel:0xc6e5ff},
+      castle:{bg:0x1c120e,fog:0x34231b,floor:0x705847,wall:0xa78868,ceiling:0x6e5540,hemiSky:0xffddba,lightPanel:0xffd6a1},
+      maze:{bg:0x17160d,fog:0x302d1b,floor:0x6e674c,wall:0xb4ad76,ceiling:0x858060},
+      abyss:{bg:0x120e20,fog:0x251d39,floor:0x40394f,wall:0x78648f,ceiling:0x574767,hemiSky:0xe3c6ff,hemiGround:0x1b102c,lightPanel:0xdcc5ff}
+    })[this.mapKey] || null;
     const theme = this.currentMapTheme || {};
     this.scene.background = new THREE.Color(theme.bg ?? 0x16130b);
     this.scene.fog = new THREE.Fog(theme.fog ?? 0x2a2517, 14, this.quality.fogFar);
@@ -3353,7 +2303,6 @@ class Game {
     // 플레이어가 설치 벽으로 둘러싸인 상황에서 적 AI가 매 프레임 비싼 경로탐색을 반복하지 않도록 제어한다.
     this.pathFailCacheTtl = 1.25;
 
-
     const floor = new THREE.Mesh(this.geos.floor, this.materials.floor);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = !!this.quality.shadows;
@@ -3390,10 +2339,11 @@ class Game {
       shotgunBreach: false, railOvercharge: false, rocketPayload: false
     };
     this.hp = 100; this.maxHp = 100; this.downed = false; this._downToastShown = false;
-    this.medkits = 0; this.maxMedkits = 100;
+    this.medkits = 25; this.maxMedkits = 100;
     this.assistHold = 0; this.assistTargetId = null; this.assistSent = false; this.eSelfConsumed = false;
+    this.missionsCleared=0;this.bonusesCleared=0;this.missionState=null;
     this.wave = (this.startWave || 1) - 1; this.score = 0; this.kills = 0; this.headshots = 0; this.rewardsTaken = 0;
-    this.rankedRun = this.runMode !== 'story' && (this.startWave || 1) === 1;
+    this.rankedRun = (this.startWave || 1) === 1;
     this.runEnded = false;
     this.runOutcome = 'defeated';
     this.rewardStacks = {};
@@ -3402,12 +2352,10 @@ class Game {
     this.rewardOpen = false; this.prepTimer = 0; this.prepPhase = false;
     this.waveBreak = 0; this.spawnQueue = 0; this.spawnTimer = 0;
     this.currentMission = null; this.missionTimer = 0; this.missionCompletePending = false; this.objectiveCores = [];
-    this.storyObjects = []; this.storySurvivor = null; this.storySurvivorHudTimer = 0; this.storySequence = null; this.storyInteractionHold = 0; this.storyInteractionTarget = null; this.storyEventTime = 0;
-    this.dialogueQueue = []; this.dialogueActive = null; this.dialogueTimer = 0; this.storyCinematicState = null; this.storyCinematicQueue = []; this.pauseAfterStoryCinematic = false;
-    UI.storyDialogue?.classList.remove('show'); UI.storyTargetMarker?.classList.remove('show'); UI.storyCinematic?.classList.remove('show'); document.body.classList.remove('story-sequence-active');
-    this.setupStoryEnvironment();
+
     this.enemies = []; this.projectiles = []; this.pickups = []; this.fx = []; this.placeables = [];
-    this.serverEnemyAuthority = false; this._serverEnemyAuthorityStarted = false;
+    this.serverEnemyAuthority = this.lobby.mode==='coop'; this._serverEnemyAuthorityStarted = false;
+    this.networkItems=new Map();this.networkProjectiles=new Map();this.networkPlaceables=new Map();this.serverRewardMode=false;this.serverRewardChosen=false;this.lastServerRewardWave=null;this.serverExtractRequested=false;this._serverPositionSeen=false;
     this.remotePlayers = new Map();
     this.enemyIntroduced = new Set();
     this.waveTipShown = new Set();
@@ -3430,15 +2378,14 @@ class Game {
     }
     this.ammo.pistol = Infinity;
     this.mag.pistol = this.getWeapon('pistol').magSize;
-    this.applyStoryLoadout();
+    
     this.selectedWeapon = 'pistol';
     this.selectWeapon('pistol', true);
     this.buildViewWeapon();
     this.nextWave();
-    if (this.runMode === 'story') this.queueStoryDialogueSequence(STORY_DIALOGUES[this.storyChapter?.id]?.intro || [], .65);
-    // 스토리 모드는 챕터별 지급 장비와 적 드롭만 사용한다. 맵 시작 시 무작위 상자를
+    
     // 흩뿌리지 않아 공간 연출과 임무 동선이 소품에 가려지지 않게 한다.
-    if (this.runMode !== 'story' && !(this.lobby?.mode === 'coop' && this.net?.connected)) this.spawnInitialItemBoxes();
+    if (!(this.lobby?.mode === 'coop' && this.net?.connected)) this.spawnInitialItemBoxes();
     this.updateCamera();
     this.updateHud();
   }
@@ -3508,8 +2455,8 @@ class Game {
     const redStainMat = new THREE.MeshBasicMaterial({ color: theme.redStain ?? 0x4b0707, transparent: true, opacity: .18, depthWrite: false });
     const stainGeo = new THREE.BoxGeometry(1, .018, 1);
     const defaultStains = Math.max(4, Math.floor(this.map.size / 4));
-    const storyStains = 4 + Math.min(6, Number(this.storyChapter?.id) || 0);
-    const stainCount = Math.min(this.quality.stainCount ?? 20, this.runMode === 'story' ? storyStains : defaultStains);
+    
+    const stainCount = Math.min(this.quality.stainCount ?? 20, (defaultStains));
     for (let i = 0; i < stainCount; i++) {
       let x = rand(-s + 5, s - 5), z = rand(-s + 5, s - 5);
       for (let tries = 0; tries < 8 && this.collides(x, z, 1.3); tries++) { x = rand(-s + 5, s - 5); z = rand(-s + 5, s - 5); }
@@ -3613,7 +2560,7 @@ class Game {
     const index = new Map();
     const key = (ix, iz) => `${ix},${iz}`;
     for (const o of this.obstacles || []) {
-      if (!o.alive || o.dynamicStory) continue;
+      if (!o.alive) continue;
       const minX = clamp(Math.floor((o.x - o.w/2 - 1.5 + half) / cell), 0, cols - 1);
       const maxX = clamp(Math.floor((o.x + o.w/2 + 1.5 + half) / cell), 0, cols - 1);
       const minZ = clamp(Math.floor((o.z - o.d/2 - 1.5 + half) / cell), 0, cols - 1);
@@ -3648,10 +2595,9 @@ class Game {
         for (const o of arr) if (!seen.has(o)) { seen.add(o); out.push(o); }
       }
     }
-    // 이동하는 스토리 NPC/화물은 정적 공간 인덱스를 매 프레임 재생성하지 않고
     // 소수의 동적 충돌체만 직접 확인한다.
     for (const o of this.obstacles || []) {
-      if (!o.alive || !o.dynamicStory || seen.has(o)) continue;
+      continue;
       const reach = radius + Math.max(o.w || 0, o.d || 0) * .55 + 1.2;
       if (Math.abs(x - o.x) <= reach && Math.abs(z - o.z) <= reach) { seen.add(o); out.push(o); }
     }
@@ -3906,7 +2852,6 @@ class Game {
     return mesh;
   }
 
-
   createRemotePlayerModel(role = 'ally') {
     const g = new THREE.Group();
     g.userData.type = 'remotePlayer';
@@ -4038,7 +2983,6 @@ class Game {
     r.lastSeen = now();
   }
 
-
   applyRemoteAction(playerId, action = {}) {
     if (!this.running || this.lobby.mode !== 'coop' || !playerId) return;
     const selfId = this.net?.socket?.id;
@@ -4070,56 +3014,42 @@ class Game {
     }
   }
 
-  applyNetworkSnapshot(payload = {}) {
-    if (!this.running || this.lobby.mode !== 'coop') return;
-    const selfId = this.net?.socket?.id;
-    const seen = new Set();
-    for (const p of payload.players || []) {
-      if (!p?.id) continue;
-      if (p.id === selfId) {
-        // v31: 2인 멀티 중 HP/생존 판정은 서버가 권위적으로 보낸다.
-        const serverMaxHp = Number(p.state?.maxHp);
-        if (Number.isFinite(serverMaxHp) && serverMaxHp > 0) this.maxHp = Math.max(this.maxHp || 100, serverMaxHp);
-        const serverHp = Number(p.state?.hp);
-        const wasDowned = !!this.downed;
-        this.downed = !!p.state?.downed;
-        if (Number.isFinite(serverHp)) {
-          if (!this.downed && serverHp < this.hp - .5) this.damagePlayer(Math.max(1, this.hp - serverHp), { x: this.player.x, z: this.player.z - 1 }, 'hit');
-          this.hp = clamp(serverHp, 0, this.maxHp);
-        }
-        if (this.downed && !wasDowned) { this.showToast('쓰러짐: 아군이 E 길게 눌러 부활 가능'); this._downToastShown = true; }
-        if (!this.downed && wasDowned) { this.showToast('부활 완료'); this._downToastShown = false; }
-        const serverKit = Number(p.state?.medkits);
-        if (Number.isFinite(serverKit)) this.medkits = clamp(serverKit, 0, this.maxMedkits || 100);
-        const serverMaxKit = Number(p.state?.maxMedkits);
-        if (Number.isFinite(serverMaxKit) && serverMaxKit > 0) this.maxMedkits = Math.max(this.maxMedkits || 100, serverMaxKit);
-        if (p.state?.weaponState) this.syncLocalWeaponState(p.state.weaponState);
-        this.reconcileLocalPlayerWithServer(p.state || {});
-        if ((p.state?.alive === false || this.hp <= 0) && !this.downed) this.hp = 0;
-        continue;
-      }
-      seen.add(p.id);
-      this.applyRemoteInput(p.id, { ...(p.state || {}), role: p.role });
+  applyNetworkSnapshot(payload={}) {
+    if(!this.running || this.lobby.mode!=='coop' || payload.roomCode!==this.lobby.roomCode || !payload.game)return;
+    const g=payload.game,selfId=this.net.socket?.id,newLevel=this.currentMission?.wave!==g.wave;
+    this.serverEnemyAuthority=true;this.serverGamePhase=g.phase;this.wave=g.wave;this.spawnQueue=g.spawnQueue;this.initialWaveCount=g.initialCount;
+    this.score=g.score;this.kills=g.kills;this.headshots=g.headshots;this.missionsCleared=g.missionsCleared;this.bonusesCleared=g.bonusesCleared;this.networkElapsed=g.elapsed;
+    if(newLevel){this.cleanupObjectiveCores(false);this.cleanupMissionTargets();this.serverRewardChosen=false;this.serverExtractRequested=false;this.lastServerRewardWave=null;}
+    this.currentMission=g.mission;this.missionState=g.missionState;this.missionTimer=g.missionState?.timer || 0;
+    this.prepPhase=g.phase==='prep';this.prepTimer=g.prepTimer || 0;this.prepReadyCount=g.prepReadyCount || 0;
+    if(!this.prepPhase)this.prepVoteSent=false;
+    const seen=new Set();for(const p of payload.players || []){
+      if(p.id===selfId){
+        const ps=p.state,wasDowned=this.downed,oldHp=this.hp;
+        this.maxHp=ps.maxHp;this.maxMedkits=ps.maxMedkits;this.medkits=ps.medkits;
+        this.downed=!!ps.downed;
+        if(ps.hp<oldHp && !this.downed)this.damagePlayer(oldHp-ps.hp,{x:this.player.x,z:this.player.z-1},'hit');
+        this.hp=ps.hp;this.player.staminaRegen=10*Math.pow(1.2,ps.upgrades?.rewardStacks?.regen || 0);
+        if(ps.upgrades){this.upgrades={...this.upgrades,...ps.upgrades};this.rewardStacks=ps.upgrades.rewardStacks;this.player.speed=4.45*Math.pow(1.04,this.rewardStacks.speed || 0);this.player.sprint=7.65*Math.pow(1.04,this.rewardStacks.speed || 0);}
+        this.syncLocalWeaponState(ps.weaponState);this.reconcileLocalPlayerWithServer(ps);
+        if(!this.downed && wasDowned)this.showToast('친구가 부활시켰습니다');
+      }else{seen.add(p.id);this.applyRemoteInput(p.id,{...p.state,role:p.role});}
     }
-    const t = now();
-    for (const [id, r] of this.remotePlayers || []) {
-      if (!seen.has(id) && t - (r.lastSeen || 0) > 2.5) this.removeRemotePlayer(id);
-    }
-    if (payload.game) {
-      this.serverEnemyAuthority = true;
-      this.wave = Number(payload.game.wave || this.wave || 1);
-      this.spawnQueue = Number(payload.game.spawnQueue || 0);
-      this.serverGamePhase = payload.game.phase || 'combat';
-      if (this.serverGamePhase === 'prep') { this.prepPhase = true; this.prepTimer = Number(payload.game.prepTimer || this.prepTimer || 0); }
-      if (Number.isFinite(Number(payload.game.score))) this.score = Math.max(this.score || 0, Number(payload.game.score));
-      if (Number.isFinite(Number(payload.game.kills))) this.kills = Math.max(this.kills || 0, Number(payload.game.kills));
-      if (Number.isFinite(Number(payload.game.headshots))) this.headshots = Math.max(this.headshots || 0, Number(payload.game.headshots));
-    }
-    if (Array.isArray(payload.placeables)) this.syncServerPlaceables(payload.placeables);
-    if (Array.isArray(payload.items)) this.syncServerItems(payload.items);
-    if (Array.isArray(payload.projectiles)) this.syncServerProjectiles(payload.projectiles);
-    if (Array.isArray(payload.enemies)) this.syncServerEnemies(payload.enemies);
-    if (Array.isArray(payload.events)) this.applyServerEvents(payload.events);
+    for(const id of this.remotePlayers.keys())if(!seen.has(id))this.removeRemotePlayer(id);
+    this.unlockWeapons();this.syncServerEnemies(payload.enemies || []);this.syncServerCores(payload.cores || []);this.syncServerPlaceables(payload.placeables || []);this.syncServerItems(payload.items || []);this.syncServerProjectiles(payload.projectiles || []);this.syncMissionTargets();
+    this.setConnectionBlocked(g.suspended,'친구가 다시 연결하고 있습니다',String(g.waitingSeconds || 120)+'초 동안 현재 진행을 보관합니다. 연결되면 이어서 플레이합니다.');
+    if(g.phase==='reward' && g.reward){
+      this.serverRewardMode=true;
+      const chosen=Object.hasOwn(g.reward.selected,selfId);
+      if(!chosen && !this.serverRewardChosen && this.lastServerRewardWave!==g.wave){this.lastServerRewardWave=g.wave;this.showServerRewardChoices(g.reward.choicesByPlayer[selfId] || [],g.wave);}
+      if(UI.rewardSubtitle && this.rewardOpen)UI.rewardSubtitle.textContent='목표 +'+g.reward.completionScore+' · 추가 목표 +'+g.reward.bonusScore+' · '+Math.ceil(g.reward.remaining)+'초 후 미선택 보상 자동 적용';
+      if(UI.rewardExtract){UI.rewardExtract.hidden=g.wave%10!==0;UI.reward?.classList.toggle('can-extract',g.wave%10===0);UI.rewardExtract.textContent=this.serverExtractRequested?'친구의 탈출 동의 대기':'두 사람 탈출하기';}
+      if(chosen && this.rewardOpen){this.rewardOpen=false;UI.reward.classList.remove('show');this.resetRewardSelection();}
+    }else{this.serverRewardMode=false;this.serverRewardChosen=false;this.rewardOpen=false;UI.reward?.classList.remove('show');}
+    if(newLevel && g.phase==='combat')this.showCenterAlert('LEVEL '+g.wave+' · '+g.mission.label,g.mission.desc,g.mission.elite?'danger':'info',3);
+    this.applyServerEvents((payload.events || []).filter(e=>!['rewardStart','prepStart','waveStart','teamWipe'].includes(e.type)));
+    this.updateHud();
+    if(g.phase==='gameover'){this.setConnectionBlocked(false);this.endGame(g.outcome || 'defeated');}
   }
 
   reconcileLocalPlayerWithServer(state = {}) {
@@ -4152,9 +3082,7 @@ class Game {
     if (state.grounded !== undefined) this.player.grounded = !!state.grounded;
   }
 
-  usesServerEnemyAuthority() {
-    return !!(this.running && this.lobby?.mode === 'coop' && this.net?.connected && this.serverEnemyAuthority);
-  }
+  usesServerEnemyAuthority() { return !!(this.running && this.lobby.mode==='coop' && this.serverEnemyAuthority); }
 
   syncLocalWeaponState(ws = {}) {
     if (!ws || typeof ws !== 'object') return;
@@ -4179,16 +3107,16 @@ class Game {
       const id = String(sp.id); seen.add(id);
       let rec = this.networkProjectiles.get(id);
       if (!rec) {
-        const kind = sp.kind === 'rocket' ? 'rocket' : 'grenade';
-        const mesh = new THREE.Mesh(this.geos.sphere, kind === 'rocket' ? this.materials.fire : this.materials.bullet);
-        mesh.scale.setScalar(kind === 'rocket' ? .22 : .17);
+        const kind = ['rocket','fireball'].includes(sp.kind) ? sp.kind : 'grenade';
+        const mesh = kind==='fireball'?this.createCasterOrb():new THREE.Mesh(this.geos.sphere, kind === 'rocket' ? this.materials.fire : this.materials.bullet);
+        if(kind!=='fireball')mesh.scale.setScalar(kind === 'rocket' ? .22 : .17);
         mesh.position.set(Number(sp.x) || 0, Number(sp.y) || 1.4, Number(sp.z) || 0);
         this.scene.add(mesh);
         rec = { serverId: id, networked: true, kind, mesh, x: mesh.position.x, y: mesh.position.y, z: mesh.position.z, alive: true };
         this.projectiles.push(rec);
         this.networkProjectiles.set(id, rec);
       }
-      rec.x = Number(sp.x) || rec.x; rec.y = Number(sp.y) || rec.y; rec.z = Number(sp.z) || rec.z; rec.alive = sp.alive !== false;
+      rec.x = Number.isFinite(sp.x)?sp.x:rec.x; rec.y = Number.isFinite(sp.y)?sp.y:rec.y; rec.z = Number.isFinite(sp.z)?sp.z:rec.z; rec.alive = sp.alive !== false;
       rec.mesh.position.set(rec.x, rec.y, rec.z);
     }
     for (const [id, rec] of [...this.networkProjectiles]) {
@@ -4204,11 +3132,11 @@ class Game {
     const mesh = this.createBoxheadModel(type);
     mesh.position.set(Number(snapshot.x) || 0, 0, Number(snapshot.z) || 0);
     mesh.rotation.y = Number(snapshot.yaw) || 0;
-    this.scene.add(mesh);
+    if(snapshot.elite)mesh.scale.setScalar(1.18);this.scene.add(mesh);
     const stats = this.enemyStats(type);
     return {
       id: snapshot.id, serverId: snapshot.id, type, mesh, alive: true,
-      x: mesh.position.x, z: mesh.position.z, targetX: mesh.position.x, targetZ: mesh.position.z, yaw: mesh.rotation.y, targetYaw: mesh.rotation.y,
+      x: mesh.position.x, z: mesh.position.z, targetX: mesh.position.x, targetZ: mesh.position.z, yaw: mesh.rotation.y, targetYaw: mesh.rotation.y,elite:!!snapshot.elite,
       vx: 0, vz: 0, hp: Number(snapshot.hp) || stats.hp, maxHp: Number(snapshot.maxHp) || stats.hp,
       speed: stats.speed, radius: stats.radius, damage: stats.damage, score: stats.score,
       attackCd: 0, meleeCd: 0, stun: 0, hitTimer: 0, hitMax: .001, hitLean: 0, bloodCount: 0,
@@ -4236,8 +3164,8 @@ class Game {
       }
       const wasAlive = e.alive;
       e.type = s.type || e.type;
-      e.targetX = Number(s.x) || e.x;
-      e.targetZ = Number(s.z) || e.z;
+      e.targetX = Number.isFinite(s.x)?s.x:e.x;
+      e.targetZ = Number.isFinite(s.z)?s.z:e.z;
       e.targetYaw = Number.isFinite(Number(s.yaw)) ? Number(s.yaw) : e.targetYaw;
       e.maxHp = Number(s.maxHp) || e.maxHp;
       e.hp = Number(s.hp) || 0;
@@ -4287,11 +3215,12 @@ class Game {
     for (const ev of events) {
       if (!ev || !ev.type) continue;
       const e = this.enemies.find(x => String(x.serverId ?? x.id) === String(ev.enemyId));
+      if(ev.type==='coreDestroyed'){this.spawnEnemySpawnFx(ev.x,ev.z,'bomber');this.audio.explosion();this.showToast('감염 코어 파괴');}
       if (ev.type === 'enemySpawn') this.spawnEnemySpawnFx(ev.x || 0, ev.z || 0, ev.enemyType || 'zombie');
       if (ev.type === 'enemyHit' && e) {
         e.hitTimer = e.hitMax = ev.part === 'head' ? .22 : .14;
         e.hitLean = ev.part === 'head' ? .35 : .18;
-        if (ev.part === 'head') this.showHeadshot();
+        if (ev.shooterId===this.net.socket?.id) {this.audio.hit(ev.part==='head'?'head':'flesh');if(ev.part==='head')this.showHeadshot(false);}
         if (e.type !== 'devil') this.addBloodPatch(e, ev.damage || 12, ev.part === 'head' ? 'headshot' : 'bullet');
       }
       if (ev.type === 'enemyMelee' && e) {
@@ -4327,8 +3256,6 @@ class Game {
     }
   }
 
-
-
   syncServerPlaceables(list = []) {
     if (!this.networkPlaceables) this.networkPlaceables = new Map();
     const seen = new Set();
@@ -4354,7 +3281,7 @@ class Game {
         this.networkPlaceables.set(id, rec);
       }
       const o = rec.object;
-      o.x = Number(sp.x) || o.x; o.z = Number(sp.z) || o.z; o.hp = Number(sp.hp ?? o.hp); o.maxHp = Number(sp.maxHp ?? o.maxHp); o.alive = sp.alive !== false;
+      o.x = Number.isFinite(sp.x)?sp.x:o.x; o.z = Number.isFinite(sp.z)?sp.z:o.z; o.hp = Number(sp.hp ?? o.hp); o.maxHp = Number(sp.maxHp ?? o.maxHp); o.alive = sp.alive !== false;
       if (o.mesh) o.mesh.position.set(o.x, kind === 'wall' ? WORLD.WALL_HEIGHT / 2 : 0, o.z);
       if (kind === 'wall') {
         const level = o.maxHp ? Math.floor((1 - o.hp / o.maxHp) * 4) : 0;
@@ -4385,7 +3312,7 @@ class Game {
         p = { serverId: id, networked: true, alive: true, mesh, x: mesh.position.x, z: mesh.position.z, kind: si.kind || 'ammo', weapon: si.weapon || 'smg', amount: Number(si.amount || 20), life: Number(si.life || 20) };
         this.pickups.push(p); this.networkItems.set(id, p);
       }
-      p.x = Number(si.x) || p.x; p.z = Number(si.z) || p.z; p.kind = si.kind || p.kind; p.weapon = si.weapon || p.weapon; p.amount = Number(si.amount || p.amount); p.life = Number(si.life || p.life); p.alive = si.alive !== false;
+      p.x = Number.isFinite(si.x)?si.x:p.x; p.z = Number.isFinite(si.z)?si.z:p.z; p.kind = si.kind || p.kind; p.weapon = si.weapon || p.weapon; p.amount = Number(si.amount || p.amount); p.life = Number(si.life || p.life); p.alive = si.alive !== false;
       if (p.mesh) p.mesh.position.set(p.x, p.mesh.position.y, p.z);
     }
     for (const [id, item] of [...this.networkItems]) {
@@ -4618,1201 +3545,36 @@ class Game {
     }
   }
 
+  getMissionForWave(w) { return getMission(w); }
 
-  createStorySurvivorModel() {
-    const g = new THREE.Group();
-    g.userData.type = 'storySurvivor';
-    this.addPart(g, this.geos.charTorso, this.materials.shirtBlack, 0, .84, 0, .98, 1.10, .96);
-    this.addPart(g, this.geos.lowBox, this.materials.gunAccent, 0, 1.08, .525, .62, .10, .055);
-    this.addPart(g, this.geos.charHead, this.materials.skin, 0, 1.58, 0, .98, .98, .98);
-    this.addPart(g, this.geos.facePanel, this.materials.skin, 0, 1.55, .375, .90, .76, 1);
-    this.addPart(g, this.geos.hairCap, this.materials.hair, 0, 1.98, 0, 1.0, .72, 1.0);
-    const leftArm = new THREE.Group(); leftArm.position.set(-.56, .98, .16);
-    const rightArm = new THREE.Group(); rightArm.position.set(.56, .98, .16);
-    this.addPart(leftArm, this.geos.charArm, this.materials.shirtBlack, 0, -.22, 0, .72, .92, .72);
-    this.addPart(rightArm, this.geos.charArm, this.materials.shirtBlack, 0, -.22, 0, .72, .92, .72);
-    this.addPart(leftArm, this.geos.charShoe, this.materials.gloveBlue, 0, -.66, .04, .48, .72, .50);
-    this.addPart(rightArm, this.geos.charShoe, this.materials.gloveBlue, 0, -.66, .04, .48, .72, .50);
-    g.add(leftArm); g.add(rightArm);
-    g.userData.leftArm = leftArm; g.userData.rightArm = rightArm;
-    const leftLeg = this.addPart(g, this.geos.charLeg, this.materials.shirtBlack, -.20, .28, .02, .96, 1, .96);
-    const rightLeg = this.addPart(g, this.geos.charLeg, this.materials.shirtBlack, .20, .28, .02, .96, 1, .96);
-    g.userData.leftLeg = leftLeg; g.userData.rightLeg = rightLeg;
-    this.addPart(g, this.geos.charShoe, this.materials.shoeBlack, -.23, .04, .10, 1.05, 1, 1.12);
-    this.addPart(g, this.geos.charShoe, this.materials.shoeBlack, .23, .04, .10, 1.05, 1, 1.12);
-    this.addPart(g, this.geos.lowBox, this.materials.gunYellowAccent, 0, .62, -.12, .46, .10, .12);
-    return g;
-  }
-
-  getStorySurvivor() {
-    if (this.storySurvivor && this.storyObjects?.includes(this.storySurvivor)) return this.storySurvivor;
-    this.storySurvivor = (this.storyObjects || []).find(o => o.role === 'survivor') || null;
-    return this.storySurvivor;
-  }
-
-  getActiveStorySurvivor() {
-    const sv = this.getStorySurvivor();
-    if (!sv || this.runMode !== 'story' || this.storyChapter?.id !== 1 || sv.dead || (sv.hp ?? 0) <= 0) return null;
-    if (this.currentMission?.type !== 'rescue' || !this.storySequence?.rescued || this.storySequence?.survivorExtracted) return null;
-    return sv;
-  }
-
-  ensureStorySurvivorHealthHud() {
-    let el = document.getElementById('story-survivor-health');
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = 'story-survivor-health';
-    el.innerHTML = '<div class="story-survivor-health-name"><b>오세현 팀장</b><em>160 / 160</em></div><div class="story-survivor-health-track"><i></i></div>';
-    document.body.appendChild(el);
-    return el;
-  }
-
-  updateStorySurvivorHealthHud(dt = 0, force = false) {
-    this.storySurvivorHudTimer = Math.max(0, (this.storySurvivorHudTimer || 0) - dt);
-    if (!force && this.storySurvivorHudTimer > 0) return;
-    this.storySurvivorHudTimer = 1 / 12;
-    const el = this.ensureStorySurvivorHealthHud();
-    const sv = this.getStorySurvivor();
-    const visible = !!sv && this.runMode === 'story' && this.storyChapter?.id === 1 && this.currentMission?.type === 'rescue' && !this.storySequence?.survivorExtracted && !this.gameOver;
-    if (!visible || !this.camera || !this.player) { el.classList.remove('show'); return; }
-    const v = this.storyMarkerVec.set(sv.x, 2.55, sv.z).project(this.camera);
-    const behind = v.z < -1 || v.z > 1;
-    const x = (v.x * .5 + .5) * window.innerWidth;
-    const y = (-v.y * .5 + .5) * window.innerHeight;
-    if (behind || x < -80 || x > window.innerWidth + 80 || y < -50 || y > window.innerHeight + 80) { el.classList.remove('show'); return; }
-    const maxHp = Math.max(1, sv.maxHp || 160);
-    const hp = clamp(sv.hp ?? maxHp, 0, maxHp);
-    el.style.left = `${x}px`;
-    el.style.top = `${y}px`;
-    el.style.setProperty('--survivor-hp', `${hp / maxHp * 100}%`);
-    const value = el.querySelector('em');
-    if (value) value.textContent = `${Math.ceil(hp)} / ${Math.ceil(maxHp)}`;
-    el.classList.toggle('critical', hp / maxHp <= .28);
-    el.classList.toggle('dead', hp <= 0);
-    el.classList.add('show');
-  }
-
-  damageStorySurvivor(amount, source = null, kind = 'melee') {
-    const sv = this.getActiveStorySurvivor();
-    if (!sv || sv.invulnerableTimer > 0) return false;
-    const actual = Math.max(0, Number(amount) || 0);
-    if (actual <= 0) return false;
-    sv.hp = Math.max(0, (sv.hp ?? sv.maxHp ?? 160) - actual);
-    sv.invulnerableTimer = kind === 'explosion' ? .18 : .10;
-    sv.hitFlash = .24;
-    this.audio.playerHit(kind === 'explosion' ? 'explosion' : 'melee');
-    const el = this.ensureStorySurvivorHealthHud();
-    el.classList.remove('hurt');
-    void el.offsetWidth;
-    el.classList.add('hurt');
-    this.updateStorySurvivorHealthHud(0, true);
-    if (sv.hp > 0) return true;
-    sv.dead = true;
-    sv.active = false;
-    if (sv.collider) sv.collider.alive = false;
-    if (sv.marker) sv.marker.visible = false;
-    if (sv.group) { sv.group.rotation.z = 1.42; sv.group.position.y = .08; }
-    if (this.storySequence) this.storySequence.survivorDead = true;
-    this.showCenterAlert('오세현 사망', '구조 대상이 사망했습니다. 작전을 계속할 수 없습니다.', 'danger', 2.4);
-    this.queueDialogue('격리국 관제|구조 대상 생체 신호 소실. 작전 실패.', { delay: 0 });
-    setTimeout(() => {
-      if (this.running && !this.gameOver && this.runMode === 'story' && this.currentMission?.type === 'rescue') this.endGame('survivor-lost');
-    }, 650);
-    return true;
-  }
-
-  stepStoryMover(o, tx, tz, speed, dt, radius = .58, stopDistance = .9) {
-    if (!o || !Number.isFinite(tx) || !Number.isFinite(tz)) return true;
-    const dx = tx - o.x, dz = tz - o.z;
-    const distance = Math.hypot(dx, dz);
-    if (distance <= stopDistance) return true;
-    const px = o.x, pz = o.z;
-    const inv = 1 / Math.max(.0001, distance);
-    const ownCollider = o.collider;
-    const colliderWasAlive = !!ownCollider?.alive;
-    if (ownCollider) ownCollider.alive = false;
-    try {
-      this.moveEntity(o, dx * inv * speed * dt, dz * inv * speed * dt, radius);
-      let moved = Math.hypot(o.x - px, o.z - pz);
-      if (moved < Math.max(.01, speed * dt * .14)) {
-        const tries = [
-          [-dz * inv, dx * inv],
-          [dz * inv, -dx * inv],
-          [dx * inv * .72 - dz * inv * .34, dz * inv * .72 + dx * inv * .34],
-          [dx * inv * .72 + dz * inv * .34, dz * inv * .72 - dx * inv * .34]
-        ];
-        for (const [nx, nz] of tries) {
-          const sx = o.x, sz = o.z;
-          this.moveEntity(o, nx * speed * dt * .8, nz * speed * dt * .8, radius);
-          moved = Math.hypot(o.x - sx, o.z - sz);
-          if (moved > .012) break;
-        }
-        if (moved < .012 && (o.stuckSnapTimer || 0) <= 0) {
-          o.stuckSnapTimer = .45;
-          const snap = this.snapStoryPointToReachable(o.x + dx * .35, o.z + dz * .35, radius, 10);
-          const sdx = snap.x - o.x, sdz = snap.z - o.z;
-          const sd = Math.hypot(sdx, sdz);
-          if (sd > .08) this.moveEntity(o, sdx / sd * speed * dt * .9, sdz / sd * speed * dt * .9, radius);
-        }
-      }
-    } finally {
-      if (ownCollider) ownCollider.alive = colliderWasAlive;
+  startMissionForWave(m=null) {
+    this.cleanupObjectiveCores(false);this.cleanupMissionTargets();
+    this.currentMission=m || getMission(this.wave);m=this.currentMission;this.missionCompletePending=false;
+    const points=[];
+    if(m.type==='holdout' || m.type==='relay')for(let i=0;i<(m.type==='relay'?3:1);i++){
+      const p=this.findMissionPoint(points,m.type==='holdout'?4.5:1.2);if(p)points.push(p);
     }
-    o.stuckSnapTimer = Math.max(0, (o.stuckSnapTimer || 0) - dt);
-    this.moveStoryObjectTo(o, o.x, o.z);
-    return Math.hypot(tx - o.x, tz - o.z) <= stopDistance;
+    this.missionState=createMissionState(m,points,{kills:this.kills,headshots:this.headshots});
+    if(m.type==='core'){this.spawnObjectiveCores(m.coreCount);this.missionState.coreRemaining=this.objectiveCores.length;this.currentMission.coreCount=this.objectiveCores.length;}
+    this.syncMissionTargets();this.missionTimer=this.missionState.timer;
+    this.showCenterAlert('LEVEL '+this.wave+' · '+m.label,m.desc,m.elite?'danger':'info',3.2);
   }
 
-  setupStoryEnvironment() {
-    if (this.runMode !== 'story' || !this.storyChapter || !this.scene) return;
-    const chapter = this.storyChapter.id;
-    const mat = (color, emissive = 0) => new THREE.MeshLambertMaterial({ color, emissive });
-    this.storyMats = {
-      steel: mat(0x27313a), dark: mat(0x10161b), yellow: mat(0xd5a932), red: mat(0x8c2828),
-      green: mat(0x2f8b62, 0x092719), blue: mat(0x3979a8, 0x071a2d), white: mat(0xb9c5c9), orange: mat(0xb95f28, 0x2b1004), violet: mat(0x6b4ba8, 0x1b1131),
-      glass: new THREE.MeshLambertMaterial({ color: 0x7ca5b8, emissive: 0x06131b, transparent: true, opacity: .24 }),
-      terminal: mat(0x4ec8b6, 0x0b2e28)
-    };
-    if (!this.storyStrokeMat) this.storyStrokeMat = new THREE.LineBasicMaterial({ color: 0x070b0d, transparent: true, opacity: .96 });
-    const markerRingGeo = new THREE.RingGeometry(.72, .96, 24);
-    const markerArrowGeo = new THREE.OctahedronGeometry(.22, 0);
-    const markerMat = new THREE.MeshBasicMaterial({ color: 0x74efff, transparent: true, opacity: .72, depthWrite: false, side: THREE.DoubleSide });
-    const strokeMesh = (mesh, scaleMul = 1.018) => {
-      if (this.quality?.simpleModels || !mesh?.geometry || mesh.userData?.storyStrokeAdded) return;
-      const edge = new THREE.LineSegments(this.getEdgeGeometry(mesh.geometry), this.storyStrokeMat);
-      edge.renderOrder = 4;
-      edge.scale.set(scaleMul, scaleMul, scaleMul);
-      mesh.add(edge);
-      mesh.userData.storyStrokeAdded = true;
-    };
-    const strokeGroup = (group, scaleMul = 1.018) => {
-      if (this.quality?.simpleModels || !group) return;
-      group.traverse?.(child => {
-        if (child?.isMesh && !child.userData?.skipStoryStroke) strokeMesh(child, scaleMul);
-      });
-    };
-    const registerStoryCollision = (group, x, z, w, d, kind = 'storyProp') => {
-      if (!group || w <= .12 || d <= .12) return null;
-      const collider = { x, z, w, d, kind, hp: Infinity, maxHp: Infinity, mesh: group, extras: [], crackLevel: 0, crackGroup: null, alive: true, storyDecor: true };
-      this.obstacles.push(collider);
-      this.collisionIndexDirty = true;
-      this.markNavDirty();
-      return collider;
-    };
-    const add = (role, x, z, opts = {}) => {
-      const group = new THREE.Group();
-      group.position.set(x, 0, z);
-      const platform = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-      platform.position.y = .06; platform.scale.set((opts.w || 1.4) + .42, .12, (opts.d || 1.1) + .42); group.add(platform);
-      const base = new THREE.Mesh(this.geos.lowBox, opts.mat || this.storyMats.steel);
-      base.position.y = opts.y || .65; base.scale.set(opts.w || 1.4, opts.h || 1.3, opts.d || 1.1); group.add(base);
-      const frame = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-      frame.position.y = (opts.y || .65) + .01; frame.scale.set((opts.w || 1.4) + .10, (opts.h || 1.3) + .10, (opts.d || 1.1) + .10); group.add(frame);
-      let rotor = null;
-      if (opts.panel !== false) {
-        const panelBack = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-        panelBack.position.set(0, (opts.y || .65) + .26, -(opts.d || 1.1) * .52 - .02); panelBack.scale.set((opts.w || 1.4) * .62, .28, .08); group.add(panelBack);
-        const panel = new THREE.Mesh(this.geos.lowBox, opts.panelMat || this.storyMats.blue);
-        panel.position.set(0, (opts.y || .65) + .28, -(opts.d || 1.1) * .52); panel.scale.set((opts.w || 1.4) * .58, .20, .055); group.add(panel);
-      }
-      if (['generator','relay','machine','scanner','beacon','citadelDoor','blastDoor'].includes(role)) {
-        rotor = new THREE.Mesh(this.geos.mineButton, opts.panelMat || this.storyMats.blue);
-        rotor.position.set(0, (opts.h || 1.3) * .62 + .35, 0); rotor.scale.set(.58,.15,.58); group.add(rotor);
-      }
-      const sideRailL = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-      sideRailL.position.set(-(opts.w || 1.4) * .52, .52, 0); sideRailL.scale.set(.08, Math.max(.85, (opts.h || 1.3) * .78), (opts.d || 1.1) * .92); group.add(sideRailL);
-      const sideRailR = sideRailL.clone(); sideRailR.position.x *= -1; group.add(sideRailR);
-      strokeGroup(group, 1.024);
-      this.scene.add(group);
-      const collidable = opts.collidable !== false && !['exit','cargoZone'].includes(role) && (opts.h || 1.3) > .3;
-      const collider = collidable ? registerStoryCollision(group, x, z, (opts.w || 1.4) + .14, (opts.d || 1.1) + .14, 'storyInteractive') : null;
-      if (collider && ['survivor','cargo','scanner'].includes(role)) collider.dynamicStory = true;
-      const marker = new THREE.Group(); marker.position.set(x, 0, z); marker.visible = false;
-      const ring = new THREE.Mesh(markerRingGeo, markerMat.clone()); ring.rotation.x = -Math.PI / 2; ring.position.y = .035; marker.add(ring);
-      const arrow = new THREE.Mesh(markerArrowGeo, markerMat.clone()); arrow.position.y = 2.25; marker.add(arrow);
-      this.scene.add(marker);
-      const purposeByRole = {
-        relay: '격리동의 물리 잠금과 통신 인증을 함께 담당한다.',
-        survivor: '다음 구역의 출입코드와 사고 당시 증언을 보유한 구조 대상이다.',
-        cargo: '무선 전송이 불가능한 차폐 기록 장치다.',
-        cargoZone: '차폐 케이스를 고정해 기록을 해독하는 분석 플랫폼이다.',
-        generator: '분리된 전력 구간을 복구해 다음 구역 좌표를 출력한다.',
-        blastDoor: '위상 또는 생체 인증이 완료될 때까지 위험 구역을 물리적으로 차단한다.',
-        beacon: '서로 다른 시간대의 방을 하나의 좌표계에 묶는다.',
-        scanner: '네트워크에서 분리된 기록을 현장에서 직접 판독한다.',
-        citadelDoor: '코어실의 공진 압력을 분산시키는 외곽 제어 장치다.',
-        machine: '공간 또는 주파수를 유지하는 핵심 설비다.',
-        exit: '구조팀이 확보한 현실 좌표와 연결된 인계 지점이다.'
-      };
-      const o = { role, x, z, group, collider, rotor, marker, markerRing:ring, markerArrow:arrow, active: false, done: false, hold: 0, completeAnim:0, label: opts.label || role, baseY: 0, pulse: Math.random()*6, destination: opts.destination || null, purpose: opts.purpose || purposeByRole[role] || '', result: opts.result || '', cameraLabel: opts.cameraLabel || opts.label || role, forceCutaway: !!opts.forceCutaway };
-      this.storyObjects.push(o); return o;
-    };
-    const addProp = (x, z, w, h, d, color, emissive = 0, details = {}) => {
-      const group = new THREE.Group();
-      const shell = new THREE.Mesh(this.geos.lowBox, mat(color, emissive));
-      shell.position.set(0, h / 2, 0); shell.scale.set(w, h, d); group.add(shell);
-      if (details.topBand) {
-        const band = new THREE.Mesh(this.geos.lowBox, mat(details.topBand));
-        band.position.set(0, h - .16, 0); band.scale.set(w * .92, .08, d * .92); group.add(band);
-      }
-      if (details.frontPanel) {
-        const panel = new THREE.Mesh(this.geos.lowBox, mat(details.frontPanel, details.frontEmissive || 0));
-        panel.position.set(0, Math.max(.38, h * .62), d * .505); panel.scale.set(w * .72, Math.min(.26, h * .16), .05); group.add(panel);
-      }
-      group.position.set(x, 0, z);
-      strokeGroup(group, 1.022);
-      this.scene.add(group);
-      group.userData.storyCollider = registerStoryCollision(group, x, z, w + .08, d + .08, 'storyDecor');
-      return group;
-    };
-    const addFloorStrip = (x, z, w, d, color = 0xd8ad39, emissive = 0x241804) => {
-      const mesh = new THREE.Mesh(this.geos.lowBox, mat(color, emissive));
-      mesh.position.set(x, .025, z); mesh.scale.set(w, .025, d); this.scene.add(mesh); return mesh;
-    };
-    const addPipe = (x, z, length, horizontal = true, color = 0x30434d) => {
-      const group = new THREE.Group();
-      const main = new THREE.Mesh(this.geos.lowBox, mat(color));
-      main.position.y = 2.72; main.scale.set(horizontal ? length : .18, .18, horizontal ? .18 : length); group.add(main);
-      for (const offset of [-.42, .42]) {
-        const brace = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-        brace.position.set(horizontal ? offset * length * .42 : 0, 2.56, horizontal ? 0 : offset * length * .42);
-        brace.scale.set(horizontal ? .14 : .52, .28, horizontal ? .52 : .14); group.add(brace);
-      }
-      group.position.set(x, 0, z); strokeGroup(group, 1.02); this.scene.add(group);
-      return group;
-    };
-    const addShelf = (x, z, horizontal = true, color = 0x3c4246) => {
-      const group = new THREE.Group();
-      const width = horizontal ? 3.6 : .75, depth = horizontal ? .75 : 3.6;
-      for (const y of [.32, 1.02, 1.72]) {
-        const board = new THREE.Mesh(this.geos.lowBox, mat(color));
-        board.position.set(0, y, 0); board.scale.set(width, .10, depth); group.add(board);
-      }
-      for (const side of [-1, 1]) {
-        const post = new THREE.Mesh(this.geos.lowBox, mat(0x20262a));
-        post.position.set(horizontal ? side * width * .46 : 0, 1.0, horizontal ? 0 : side * depth * .46);
-        post.scale.set(horizontal ? .12 : .64, 1.9, horizontal ? .64 : .12); group.add(post);
-      }
-      for (const offset of [-1.02, 0, 1.02]) {
-        const box = new THREE.Mesh(this.geos.lowBox, mat(0x687177));
-        box.position.set(horizontal ? offset : 0, 1.26, horizontal ? 0 : offset); box.scale.set(horizontal ? .68 : .54, .38, horizontal ? .54 : .68); group.add(box);
-      }
-      group.position.set(x, 0, z); strokeGroup(group, 1.022); this.scene.add(group); group.userData.storyCollider = registerStoryCollision(group, x, z, width + .08, depth + .08, 'storyDecor'); return group;
-    };
-    const addCrateStack = (x, z, count = 3, color = 0x5e4b37) => {
-      const group = new THREE.Group();
-      for (let i = 0; i < count; i++) {
-        const box = new THREE.Mesh(this.geos.lowBox, mat(color));
-        box.position.set((i % 2) * .82 - .40, .40 + Math.floor(i / 2) * .78, (i % 3 === 2 ? .25 : 0));
-        box.scale.set(.74, .72, .72); group.add(box);
-        const plate = new THREE.Mesh(this.geos.lowBox, this.storyMats.yellow);
-        plate.position.set((i % 2) * .82 - .40, .58 + Math.floor(i / 2) * .78, .37); plate.scale.set(.34, .12, .04); group.add(plate);
-      }
-      group.position.set(x, 0, z); strokeGroup(group, 1.022); this.scene.add(group); group.userData.storyCollider = registerStoryCollision(group, x, z, 1.72, 1.18, 'storyDecor'); return group;
-    };
-    const addConsoleBank = (x, z, horizontal = true, width = 3.2, color = 0x475761, screen = 0x53d8cc) => {
-      const group = new THREE.Group();
-      const base = new THREE.Mesh(this.geos.lowBox, mat(color));
-      base.position.y = .62; base.scale.set(horizontal ? width : .92, .82, horizontal ? .92 : width); group.add(base);
-      for (const offset of [-.9, 0, .9]) {
-        const screenMesh = new THREE.Mesh(this.geos.lowBox, mat(screen, 0x0b2522));
-        screenMesh.position.set(horizontal ? offset : .36, 1.18, horizontal ? -.34 : offset);
-        screenMesh.scale.set(horizontal ? .54 : .08, .26, horizontal ? .08 : .54); group.add(screenMesh);
-      }
-      const chair = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-      chair.position.set(horizontal ? 0 : -.46, .28, horizontal ? .48 : 0); chair.scale.set(horizontal ? 1.2 : .46, .24, horizontal ? .46 : 1.2); group.add(chair);
-      group.position.set(x, 0, z); strokeGroup(group, 1.024); this.scene.add(group); group.userData.storyCollider = registerStoryCollision(group, x, z, horizontal ? width + .12 : 1.18, horizontal ? 1.18 : width + .12, 'storyDecor'); return group;
-    };
-    const addServerRack = (x, z, horizontal = true, length = 3.1) => {
-      const group = new THREE.Group();
-      const count = Math.max(2, Math.round(length / 1.1));
-      for (let i = 0; i < count; i++) {
-        const rack = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-        rack.position.set(horizontal ? (-length / 2 + .6 + i * 1.05) : 0, 1.12, horizontal ? 0 : (-length / 2 + .6 + i * 1.05));
-        rack.scale.set(horizontal ? .82 : .94, 2.15, horizontal ? .94 : .82); group.add(rack);
-        for (let j = 0; j < 4; j++) {
-          const vent = new THREE.Mesh(this.geos.lowBox, this.storyMats.terminal);
-          vent.position.set(rack.position.x, .55 + j * .42, rack.position.z + (horizontal ? .48 : .48));
-          vent.scale.set(horizontal ? .48 : .48, .08, .05); group.add(vent);
-        }
-      }
-      group.position.set(x, 0, z); strokeGroup(group, 1.024); this.scene.add(group); group.userData.storyCollider = registerStoryCollision(group, x, z, horizontal ? length + .18 : 1.08, horizontal ? 1.08 : length + .18, 'storyDecor'); return group;
-    };
-    const addBarrierFrame = (x, z, horizontal = true, length = 4.2, color = 0x69868c) => {
-      const group = new THREE.Group();
-      const left = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-      left.position.set(horizontal ? -length * .48 : 0, 1.25, horizontal ? 0 : -length * .48); left.scale.set(horizontal ? .14 : 1.36, 2.5, horizontal ? 1.36 : .14); group.add(left);
-      const right = left.clone(); right.position.set(horizontal ? length * .48 : 0, 1.25, horizontal ? 0 : length * .48); group.add(right);
-      const top = new THREE.Mesh(this.geos.lowBox, mat(color));
-      top.position.set(0, 2.35, 0); top.scale.set(horizontal ? length : 1.36, .16, horizontal ? 1.36 : length); group.add(top);
-      const glass = new THREE.Mesh(this.geos.lowBox, this.storyMats.glass);
-      glass.position.set(0, 1.25, 0); glass.scale.set(horizontal ? length * .92 : 1.10, 2.0, horizontal ? 1.10 : length * .92); group.add(glass);
-      group.position.set(x, 0, z); strokeGroup(group, 1.024); this.scene.add(group); group.userData.storyCollider = registerStoryCollision(group, x, z, horizontal ? length + .12 : 1.22, horizontal ? 1.22 : length + .12, 'storyGlass'); return group;
-    };
-    const addAccentLight = (x, z, color, intensity = .72, range = 9) => {
-      const fixture = new THREE.Mesh(this.geos.lightPanel, new THREE.MeshBasicMaterial({ color }));
-      fixture.position.set(x, WORLD.CEILING_HEIGHT - .08, z); this.scene.add(fixture);
-      if ((this.quality?.lightCount || 0) >= 8) {
-        const light = new THREE.PointLight(color, intensity, range, 1.9);
-        light.position.set(x, WORLD.CEILING_HEIGHT - .62, z); this.scene.add(light);
-      }
-    };
-    const addSign = (text, x, z, rotation = 0, color = '#cceee7') => {
-      if (this.quality?.simpleModels || typeof document === 'undefined') return null;
-      const c = document.createElement('canvas'); c.width = 256; c.height = 64;
-      const ctx = c.getContext('2d');
-      ctx.fillStyle = '#0a1115'; ctx.fillRect(0,0,c.width,c.height);
-      ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.strokeRect(3,3,c.width-6,c.height-6);
-      ctx.fillStyle = color; ctx.font = '900 26px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(text, c.width/2, c.height/2 + 1);
-      const texture = new THREE.CanvasTexture(c); texture.colorSpace = THREE.SRGBColorSpace;
-      const sign = new THREE.Mesh(new THREE.PlaneGeometry(3.6,.9), new THREE.MeshBasicMaterial({ map:texture, transparent:false }));
-      sign.position.set(x, 2.45, z); sign.rotation.y = rotation; this.scene.add(sign); return sign;
-    };
-    const addDecorDoor = (x, z, horizontal = true, opts = {}) => {
-      const group = new THREE.Group();
-      const frameW = opts.width || (horizontal ? 2.4 : 1.08);
-      const frameD = opts.depth || (horizontal ? 1.08 : 2.4);
-      const frame = new THREE.Mesh(this.geos.lowBox, this.storyMats.dark);
-      frame.position.y = 1.2; frame.scale.set(frameW, 2.4, frameD); group.add(frame);
-      const leftLeaf = new THREE.Mesh(this.geos.lowBox, opts.mat || this.storyMats.steel);
-      leftLeaf.position.set(horizontal ? -.52 : 0, 1.18, horizontal ? 0 : -.52); leftLeaf.scale.set(horizontal ? .92 : .92, 2.1, horizontal ? .36 : .92); group.add(leftLeaf);
-      const rightLeaf = leftLeaf.clone(); rightLeaf.position.set(horizontal ? .52 : 0, 1.18, horizontal ? 0 : .52); group.add(rightLeaf);
-      const stripe = new THREE.Mesh(this.geos.lowBox, opts.stripe || this.storyMats.yellow);
-      stripe.position.set(0, 1.96, 0); stripe.scale.set(horizontal ? 2.08 : .16, .10, horizontal ? .16 : 2.08); group.add(stripe);
-      const panel = new THREE.Mesh(this.geos.lowBox, opts.panelMat || this.storyMats.blue);
-      panel.position.set(horizontal ? 1.35 : .46, 1.16, horizontal ? .34 : 1.35); panel.scale.set(.24, .34, .10); group.add(panel);
-      group.position.set(x, 0, z); strokeGroup(group, 1.028); this.scene.add(group);
-      if (opts.collide !== false) group.userData.storyCollider = registerStoryCollision(group, x, z, frameW + .08, frameD + .08, 'storyDecorDoor');
-      return group;
-    };
-    const addDoor = (role, x, z, w = 5.4, horizontal = true) => {
-      const obstacle = this.addObstacle(x, z, horizontal ? w : 1.1, horizontal ? 1.1 : w, 'storyDoor');
-      obstacle.mesh.material = this.storyMats.dark;
-      const stripe = new THREE.Mesh(this.geos.lowBox, this.storyMats.yellow); stripe.position.set(x, 2.15, z); stripe.scale.set(horizontal ? w*.82 : .14, .10, horizontal ? .14 : w*.82); this.scene.add(stripe);
-      const doorVisual = addDecorDoor(x, z, horizontal, { width: horizontal ? Math.max(2.8, w * .42) : 1.08, depth: horizontal ? 1.08 : Math.max(2.8, w * .42), stripe: this.storyMats.yellow, collide:false });
-      const o = { role, x, z, group: obstacle.mesh, stripe, doorVisual, obstacle, active:false, done:false, hold:0, label:'격리문 제어반', door:true, openT:0, pulse:0, purpose:'인증 전에는 위험 구역으로 통하는 유일한 통로를 물리적으로 차단한다.', result:'잠금핀이 해제되면 셔터가 상승해 새로운 진행 구역을 연다.', cameraLabel:'격리 셔터 감시 카메라', forceCutaway:true };
-      this.storyObjects.push(o); return o;
-    };
-
-    if (chapter === 1) {
-      [[-18, -20, 2.8, 2.2, 2.8], [-8, -20, 2.8, 2.2, 2.8], [20, 20, 4.2, 2.8, 3.2], [20, 8, 3.4, 2.2, 2.4]].forEach(p => addProp(...p, 0x415659, 0, { topBand:0x698992, frontPanel:0x9fdbcd, frontEmissive:0x122a23 }));
-      addFloorStrip(-22, 15, .22, 17, 0x4d9b89, 0x0b2a22); addFloorStrip(-7, 8, 30, .18, 0x4d9b89, 0x0b2a22); addFloorStrip(22, 16, .18, 14, 0x8dd9bc, 0x122d24);
-      addPipe(-17,-27,13,true,0x32535a); addPipe(22,12,13,false,0x32535a);
-      addConsoleBank(-22, 22, true, 2.8, 0x42555d, 0x79e7d7); addConsoleBank(15, -13, false, 2.6, 0x3e4d57, 0x8fe7ff);
-      addServerRack(-22, -10, false, 3.2); addServerRack(21, 14, false, 3.1);
-      addBarrierFrame(-6, 22, true, 5.2, 0x688f96); addBarrierFrame(20, 14, false, 4.2, 0x688f96);
-      addProp(-23, 24, 2.2, 1.2, 1.1, 0x56666c, 0, { topBand:0x87b4b8, frontPanel:0xbaf5e0, frontEmissive:0x17352c });
-      addProp(-20.5, 24, 1.1, .86, 1.1, 0x6e7d80, 0, { topBand:0xa9bcbe });
-      addProp(14, 22, 2.6, 1.4, 1.4, 0x4b5a60, 0, { topBand:0x90b0c2, frontPanel:0xd5f6ff, frontEmissive:0x12303a });
-      addDecorDoor(-27.8, 21.6, false, { mat:this.storyMats.steel, panelMat:this.storyMats.green });
-      addDecorDoor(27.8, 22.2, false, { mat:this.storyMats.steel, panelMat:this.storyMats.green });
-      addDecorDoor(-13, -28.2, true, { mat:this.storyMats.steel, panelMat:this.storyMats.blue });
-      addSign('A-01 RELAY', -17.8, -27.42, 0, '#9fffd8'); addSign('RESCUE', -28.42, 20, Math.PI/2, '#8cffb9'); addSign('QUARANTINE', 22.2, 4.6, Math.PI/2, '#b2f7ff'); addSign('SECURITY', -24.4, 26.1, Math.PI, '#aefce2');
-      addAccentLight(8,-12,0x72ffd2,.85,10); addAccentLight(-22,-24,0x65ff9a,.62,8); addAccentLight(24,30,0x9cd6ff,.58,8);
-      add('relay', 8, -12, {w:2.2,h:2.2,d:1.4,label:'중앙 중계 허브',panelMat:this.storyMats.green,forceCutaway:true,cameraLabel:'A-01 중앙 허브 CCTV',purpose:'격리동 방폭 셔터의 생체 인증과 전력 잠금을 동시에 관리한다.',result:'인증이 복구되면 셔터 잠금핀과 북측 격리동 조명이 함께 해제된다.'});
-      // 격리동은 장식용 셔터가 아니라 실제로 맵을 남·북으로 분리한다. 좌우 벽을
-      // 맵 경계까지 연결해 중앙 셔터 외에는 우회할 수 없는 유일 통로로 만든다.
-      addProp(-14, -10, 48, WORLD.WALL_HEIGHT, 1.35, 0x3b4d52, 0, { topBand:0x77929a, frontPanel:0xb7e5dc, frontEmissive:0x112d28 });
-      addProp(28, -10, 20, WORLD.WALL_HEIGHT, 1.35, 0x3b4d52, 0, { topBand:0x77929a, frontPanel:0xb7e5dc, frontEmissive:0x112d28 });
-      addFloorStrip(14, -10, 8.4, 1.9, 0xd9a83d, 0x2b1904);
-      addSign('QUARANTINE WING · LOCKED', 14, -10.72, 0, '#ffd36f');
-      const quarantineDoor = addDoor('blastDoor', 14, -10, 8, true);
-      quarantineDoor.label = '격리동 방폭 셔터';
-      quarantineDoor.purpose = '사고 당시 응급 격리동을 나머지 시설과 완전히 분리한 유일 출입구다.';
-      quarantineDoor.result = '중계 허브 인증 후 셔터가 상승해 오세현이 있는 북측 격리동으로 가는 길을 연다.';
-      quarantineDoor.cameraLabel = 'A-01 격리 셔터 CCTV';
-      quarantineDoor.forceCutaway = true;
-      const survivor=add('survivor', 24, 30, {w:.92,h:1.55,d:.72,label:'경비팀장 오세현',mat:this.storyMats.white,panel:false,forceCutaway:true,cameraLabel:'응급 격리동 CCTV',purpose:'B동 출입코드와 JANUS 봉쇄 절차를 기억하는 유일한 생존자다.'});
-      survivor.destination={x:-22,z:-24}; survivor.maxHp=160; survivor.hp=160; survivor.dead=false; survivor.invulnerableTimer=0; survivor.hitFlash=0; this.storySurvivor=survivor;
-      if (survivor.group) {
-        while (survivor.group.children.length) survivor.group.remove(survivor.group.children[0]);
-        const survivorModel = this.createStorySurvivorModel();
-        survivor.group.add(survivorModel);
-        survivor.group.userData.model = survivorModel;
-        survivor.baseY = 0;
-      }
-      add('exit',-22,-24,{w:3.5,h:.12,d:3.5,label:'후방 구조 출구',mat:this.storyMats.green,panel:false}).done=true;
-    } else if (chapter === 2) {
-      [[-34,-12,5,2.2,5],[-34,12,5,2.2,5],[34,-12,5,2.2,5],[34,12,5,2.2,5],[-16,0,3.2,2.1,3.2],[18,0,3.2,2.1,3.2]].forEach(p => addProp(...p, 0x78563a, 0, { topBand:0xa37b55, frontPanel:0xffd497, frontEmissive:0x2b1704 }));
-      addFloorStrip(0,-20,68,.16,0xc27639,0x2a1104); addFloorStrip(0,-19.2,68,.16,0xc27639,0x2a1104);
-      addFloorStrip(-34,0,.16,36,0x6f8991,0x10191c); addFloorStrip(34,0,.16,36,0x6f8991,0x10191c); addFloorStrip(0,20,42,.14,0xe1b067,0x2d1305);
-      addCrateStack(-38,-28,4,0x6d4b2f); addCrateStack(37,28,4,0x6d4b2f); addCrateStack(17,-34,3,0x59412f);
-      addConsoleBank(-22, -2, true, 3.0, 0x5c4a39, 0xffbf82); addConsoleBank(28, -20, false, 2.4, 0x644933, 0x88ffd0);
-      addServerRack(-4, 34, true, 3.4); addServerRack(34, 2, false, 3.2); addBarrierFrame(-26, 20, false, 4.0, 0xa27a54);
-      addDecorDoor(-40.2, -2, false, { mat:this.storyMats.steel, panelMat:this.storyMats.orange, stripe:this.storyMats.yellow });
-      addDecorDoor(39.8, -20, false, { mat:this.storyMats.steel, panelMat:this.storyMats.green, stripe:this.storyMats.yellow });
-      addSign('B-09 FREIGHT', -39.3, -18, Math.PI/2, '#ffd39a'); addSign('ANALYSIS', 39.3, -20, -Math.PI/2, '#9cffb7'); addSign('POWER RING', -18.2, 31.4, Math.PI, '#ffe6b2');
-      addAccentLight(-34,20,0xffb56c,.72,9); addAccentLight(34,-20,0x7dffb4,.72,9); addAccentLight(0,0,0xffd18e,.58,8);
-      const cargo=add('cargo', -34, 24, {w:1.9,h:1.1,d:1.55,label:'선발대 기록 화물',mat:this.storyMats.yellow}); cargo.destination={x:34,z:-24};
-      add('cargoZone',34,-24,{w:4.5,h:.12,d:4.5,label:'분석 적재 플랫폼',mat:this.storyMats.green,panel:false}).done=true;
-      [[-18,-20],[6,0],[-18,26]].forEach((p,i)=>add('generator', p[0], p[1], {w:1.8,h:1.8,d:1.3,label:`예비 발전기 ${i+1}`,panelMat:this.storyMats.orange}));
-    } else if (chapter === 3) {
-      [[-26,-26],[26,-26],[-26,26],[26,26]].forEach(p=>{addFloorStrip(p[0],p[1],5.8,.20,0x4a78a8,0x09182a);addFloorStrip(p[0],p[1],.20,5.8,0x4a78a8,0x09182a);});
-      addPipe(0,-41,48,true,0x253e63); addPipe(-41,0,48,false,0x253e63); addPipe(41,0,48,false,0x253e63);
-      addConsoleBank(-33, -2, false, 3.0, 0x32455d, 0xa3d8ff); addConsoleBank(33, 2, false, 3.0, 0x32455d, 0xa3d8ff);
-      addServerRack(0, -34, true, 4.4); addServerRack(0, 34, true, 4.4); addBarrierFrame(0, 0, true, 8.5, 0x6a89b5);
-      addDecorDoor(-38.2, 0, false, { mat:this.storyMats.steel, panelMat:this.storyMats.red, stripe:this.storyMats.red }); addDecorDoor(38.2, 0, false, { mat:this.storyMats.steel, panelMat:this.storyMats.red, stripe:this.storyMats.red });
-      addSign('C-12 ANCHOR', -8, -42.35, 0, '#a8d4ff'); addSign('LOCKDOWN', 8, 42.35, Math.PI, '#ff9c9c'); addSign('CONTROL', 0, -15.5, 0, '#dbe9ff');
-      addAccentLight(0,0,0x729cff,.9,12); addAccentLight(-10,-8,0xff5555,.55,7); addAccentLight(10,-8,0xff5555,.55,7);
-      [[-26,-26],[26,-26],[-26,26],[26,26]].forEach((p,i)=>add('machine',p[0],p[1],{w:2.4,h:2.5,d:2.4,label:`고정로 ${i+1}`,panelMat:this.storyMats.blue}));
-      addDoor('blastDoor',0,0,11,true);
-      add('blastDoor',-10,-8,{w:1.1,h:1.65,d:.7,label:'서측 제어반',panelMat:this.storyMats.red});
-      add('blastDoor',10,-8,{w:1.1,h:1.65,d:.7,label:'동측 제어반',panelMat:this.storyMats.red});
-      addProp(0, -34, 8, 2.2, 2.4, 0x4a5f7d, 0, { topBand:0x7ca1cb, frontPanel:0x7ec1ff, frontEmissive:0x12243b });
-      addProp(0, 34, 8, 2.2, 2.4, 0x4a5f7d, 0, { topBand:0x7ca1cb, frontPanel:0x7ec1ff, frontEmissive:0x12243b });
-    } else if (chapter === 4) {
-      [[-39,-12],[-29,4],[-16,-31],[12,10],[31,20],[31,-31]].forEach((p,i)=>addShelf(p[0],p[1],i%2===0,0x4a4437));
-      addFloorStrip(-1,38,83,.14,0xb99d58,0x201807); addFloorStrip(40,1,.14,74,0xb99d58,0x201807); addFloorStrip(-18,-6,20,.14,0x89c9d1,0x102026);
-      addConsoleBank(-42, 30, false, 2.8, 0x5e543d, 0xffe7a3); addConsoleBank(40, -36, true, 3.4, 0x576453, 0x8fdaff);
-      addServerRack(-8, 42, true, 4.0); addServerRack(28, -18, false, 3.4); addBarrierFrame(-42, 38, false, 5.4, 0xb59e6a); addBarrierFrame(40, -36, true, 5.0, 0x89a58d);
-      addDecorDoor(-46.2, 38, false, { mat:this.storyMats.steel, panelMat:this.storyMats.blue, stripe:this.storyMats.yellow });
-      addDecorDoor(46.2, -36, false, { mat:this.storyMats.steel, panelMat:this.storyMats.green, stripe:this.storyMats.yellow });
-      addSign('D-21 ATLAS', -42, 43.35, Math.PI, '#fff0aa'); addSign('CORE INDEX', 46.35, -26, -Math.PI/2, '#ffe19a'); addSign('ARCHIVE', -30.2, -38.3, 0, '#fff3c7');
-      addAccentLight(-42,38,0xffe9a1,.65,9); addAccentLight(40,-36,0x8fdfff,.78,10); addAccentLight(-8,12,0xc8f7ff,.58,8);
-      [[-32,-26],[28,-2],[-10,30]].forEach((p,i)=>add('beacon',p[0],p[1],{w:.9,h:1.7,d:.9,label:`좌표 비콘 ${i+1}`,panelMat:this.storyMats.green}));
-      const scanner=add('scanner',-42,38,{w:2.7,h:1.25,d:1.85,label:'아틀라스 스캐너',panelMat:this.storyMats.blue}); scanner.destination={x:40,z:-36};
-      [[-36,42,7,2.4,2.2],[2,42,7,2.4,2.2],[30,30,6,2.1,2.1],[-20,-38,8,2.3,2.3],[32,-36,8,2.3,2.3]].forEach(p => addProp(...p, 0x6a5c3f, 0, { topBand:0xb6a177, frontPanel:0xffe7aa, frontEmissive:0x261e08 }));
-    } else if (chapter === 5) {
-      for (const r of [10,18,28]) { addFloorStrip(0,-r,r*1.25,.14,0x7a55ad,0x1a0b30); addFloorStrip(0,r,r*1.25,.14,0x7a55ad,0x1a0b30); }
-      [[-40,0],[40,0],[0,-40],[0,40]].forEach(p=>{addFloorStrip(p[0]/2,p[1]/2,Math.abs(p[0])?38:.18,Math.abs(p[1])?38:.18,0x9b5ee0,0x250b43);});
-      addPipe(-26,-26,20,true,0x4e3769); addPipe(26,26,20,true,0x4e3769); addPipe(0,0,22,false,0x523778);
-      addConsoleBank(-16, -28, true, 3.2, 0x3f315e, 0xdab4ff); addConsoleBank(16, -28, true, 3.2, 0x3f315e, 0xff93ba);
-      addServerRack(-40, 18, false, 3.4); addServerRack(40, -18, false, 3.4); addBarrierFrame(0, 20, true, 8.8, 0x8a62be);
-      addDecorDoor(-50.3, 0, false, { mat:this.storyMats.steel, panelMat:this.storyMats.violet, stripe:this.storyMats.red }); addDecorDoor(50.3, 0, false, { mat:this.storyMats.steel, panelMat:this.storyMats.violet, stripe:this.storyMats.red });
-      addSign('E-00 JANUS', 0, -46.35, 0, '#e2c0ff'); addSign('NO RETURN', 0, 46.35, Math.PI, '#ff7aa5'); addSign('CORE ACCESS', 0, 12.6, Math.PI, '#f7d7ff');
-      addAccentLight(0,0,0xb478ff,1.18,16); addAccentLight(0,20,0xff4f77,.72,10); addAccentLight(-40,0,0xa58bff,.56,9); addAccentLight(40,0,0xa58bff,.56,9);
-      addDoor('citadelDoor',0,20,12,true);
-      [[-14,12],[0,8],[14,12]].forEach((p,i)=>add('citadelDoor',p[0],p[1],{w:1.2,h:1.7,d:1.0,label:`압력 밸브 ${i+1}`,panelMat:this.storyMats.red}));
-      [[-40,0],[40,0],[0,-40],[0,40]].forEach((p,i)=>add('machine',p[0],p[1],{w:2.8,h:3,d:2.2,label:`증폭기 ${i+1}`,panelMat:i%2?this.storyMats.orange:this.storyMats.violet}));
-      addProp(0, 0, 8, 3.2, 8, 0x503c7e, 0x120822, { topBand:0x8c69c6, frontPanel:0xf2c1ff, frontEmissive:0x2a0d35 });
-      addProp(0, -20, 6, 2.6, 6, 0x3b2c5f, 0x0c0718, { topBand:0x6d54aa, frontPanel:0xff89b5, frontEmissive:0x32101d });
-    }
-    this.ensureStoryPlayerClearance();
-    this.ensureStoryRouteIntegrity();
-    this.ensureStoryOverlay();
-  }
-
-  ensureStoryPlayerClearance() {
-    if (!this.player || !this.map || !this.collides(this.player.x, this.player.z, this.player.radius)) return;
-    const nav = this.getNavGrid(Math.max(.62, this.player.radius + .12));
-    const raw = this.navWorldToCell(this.player.x, this.player.z, nav);
-    const cell = this.nearestWalkableCell(raw.ix, raw.iz, nav, 18);
-    if (!cell) return;
-    const point = this.navCellToWorld(cell.ix, cell.iz, nav);
-    this.player.x = point.x;
-    this.player.z = point.z;
-    this.player.vx = 0;
-    this.player.vz = 0;
-  }
-
-  canReachStoryPoint(x, z, radius = WORLD.PLAYER_RADIUS, approach = 3.05) {
-    if (!this.player || !this.map) return false;
-    const navRadius = Math.max(.62, Math.min(1.0, radius + .08));
-    const nav = this.getNavGrid(navRadius);
-    const field = this.getFlowField(this.player.x, this.player.z, navRadius);
-    if (!nav || !field) return false;
-    const raw = this.navWorldToCell(x, z, nav);
-    const cellRadius = Math.max(2, Math.ceil(approach / nav.cell));
-    for (let dz = -cellRadius; dz <= cellRadius; dz++) {
-      for (let dx = -cellRadius; dx <= cellRadius; dx++) {
-        const ix = raw.ix + dx, iz = raw.iz + dz;
-        if (ix < 0 || iz < 0 || ix >= nav.cols || iz >= nav.rows) continue;
-        const i = iz * nav.cols + ix;
-        if (!nav.walkable[i] || !Number.isFinite(field.distance[i])) continue;
-        const point = this.navCellToWorld(ix, iz, nav);
-        if (Math.hypot(point.x - x, point.z - z) <= approach) return true;
-      }
-    }
-    return false;
-  }
-
-  snapStoryPointToReachable(x, z, radius = WORLD.PLAYER_RADIUS, maxR = 14) {
-    const nav = this.getNavGrid(Math.max(.62, Math.min(1.0, radius + .08)));
-    if (!nav) return { x, z };
-    const cell = this.nearestReachableWalkableCell(x, z, nav, Math.max(.42, radius - .1), maxR, false)
-      || this.nearestReachableWalkableCell(x, z, nav, Math.max(.42, radius - .1), maxR + 6, true);
-    if (!cell) return { x, z };
-    const point = this.navCellToWorld(cell.ix, cell.iz, nav);
-    return { x: point.x, z: point.z };
-  }
-
-  moveStoryObjectTo(o, x, z) {
-    if (!o) return;
-    o.x = x; o.z = z;
-    if (o.group) {
-      if (o.door && o.obstacle) {
-        o.obstacle.x = x; o.obstacle.z = z;
-        o.group.position.x = x; o.group.position.z = z;
-        if (o.obstacle.mesh) { o.obstacle.mesh.position.x = x; o.obstacle.mesh.position.z = z; }
-        for (const extra of o.obstacle.extras || []) { extra.position.x = x; extra.position.z = z; }
-      } else {
-        o.group.position.x = x; o.group.position.z = z;
-      }
-    }
-    if (o.collider) {
-      o.collider.x = x;
-      o.collider.z = z;
-      if (!o.collider.dynamicStory) {
-        this.collisionIndexDirty = true;
-        this.markNavDirty();
-      }
-    }
-    if (o.marker) {
-      o.marker.position.x = x;
-      o.marker.position.z = z;
-    }
-    if (o.stripe) {
-      o.stripe.position.x = x;
-      o.stripe.position.z = z;
-    }
-  }
-
-  syncStoryObjectCollider(o) {
-    if (!o?.collider) return;
-    o.collider.x = o.x;
-    o.collider.z = o.z;
-    if (!o.collider.dynamicStory) this.collisionIndexDirty = true;
-  }
-
-  ensureStoryRouteIntegrity() {
-    if (this.runMode !== 'story' || !this.player || !this.storyObjects?.length) return;
-    const chapter = this.storyChapter?.id || 0;
-    const names = {
-      1: ['relay','survivor','exit'],
-      2: ['cargo','cargoZone','generator'],
-      3: ['blastDoor'],
-      4: ['beacon','scanner'],
-      5: ['citadelDoor']
-    };
-    const needed = new Set(names[chapter] || []);
-    let changed = false;
-    for (const o of this.storyObjects) {
-      if (!needed.has(o.role) || o.door || o.requiresGate || (chapter === 1 && o.role === 'survivor') || !Number.isFinite(o.x) || !Number.isFinite(o.z)) continue;
-      if (this.canReachStoryPoint(o.x, o.z, .72)) continue;
-      const snapped = this.snapStoryPointToReachable(o.x, o.z, .72, 16);
-      if (Math.hypot(snapped.x - o.x, snapped.z - o.z) > .25) {
-        this.moveStoryObjectTo(o, snapped.x, snapped.z);
-        changed = true;
-      }
-    }
-    if (chapter === 1) {
-      const survivor = this.storyObjects.find(o => o.role === 'survivor');
-      if (survivor?.destination && !this.canReachStoryPoint(survivor.destination.x, survivor.destination.z, .72)) {
-        survivor.destination = this.snapStoryPointToReachable(survivor.destination.x, survivor.destination.z, .72, 18);
-        const exit = this.storyObjects.find(o => o.role === 'exit');
-        if (exit) this.moveStoryObjectTo(exit, survivor.destination.x, survivor.destination.z);
-        changed = true;
-      }
-    }
-    if (chapter === 2) {
-      const cargo = this.storyObjects.find(o => o.role === 'cargo');
-      if (cargo?.destination && !this.canReachStoryPoint(cargo.destination.x, cargo.destination.z, .72)) {
-        cargo.destination = this.snapStoryPointToReachable(cargo.destination.x, cargo.destination.z, .72, 18);
-        const zone = this.storyObjects.find(o => o.role === 'cargoZone');
-        if (zone) this.moveStoryObjectTo(zone, cargo.destination.x, cargo.destination.z);
-        changed = true;
-      }
-    }
-    if (chapter === 4) {
-      const scanner = this.storyObjects.find(o => o.role === 'scanner');
-      if (scanner?.destination && !this.canReachStoryPoint(scanner.destination.x, scanner.destination.z, .72)) {
-        scanner.destination = this.snapStoryPointToReachable(scanner.destination.x, scanner.destination.z, .72, 18);
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.collisionIndexDirty = true;
-      this.markNavDirty();
-    }
-  }
-
-  ensureStoryOverlay() {
-    if (document.getElementById('story-action-overlay')) return;
-    const el=document.createElement('div'); el.id='story-action-overlay'; el.innerHTML='<b id="story-action-title"></b><small id="story-action-reason"></small><span id="story-action-progress"></span>';
-    Object.assign(el.style,{position:'fixed',left:'50%',bottom:'18%',transform:'translateX(-50%)',maxWidth:'min(520px,calc(100vw - 32px))',padding:'10px 16px',border:'1px solid rgba(130,230,255,.55)',background:'rgba(5,12,17,.88)',color:'#eaffff',font:'800 13px system-ui',letterSpacing:'.04em',borderRadius:'8px',zIndex:'35',display:'none',pointerEvents:'none',textAlign:'center'});
-    el.querySelector('small').style.cssText='display:block;margin-top:4px;color:#b9d3d8;font:600 10px/1.35 system-ui;letter-spacing:0';
-    el.querySelector('span').style.cssText='display:block;margin-top:5px;color:#7fe8ff'; document.body.appendChild(el);
-  }
-
-  activateStoryMissionObjects() {
-    if (this.runMode !== 'story') return;
-    const m=this.currentMission; this.storySequence={ cargoAttached:false,cargoDelivered:false,rescued:false,survivorExtracted:false };
-    for (const o of this.storyObjects||[]) { o.active=false; o.hold=0; }
-    if (!m) return;
-    const matches=(o)=>o.role===m.target && !(o.door && (m.type==='door'));
-    let list=(this.storyObjects||[]).filter(matches);
-    if (m.count) list=list.slice(0,m.count);
-    for (const o of list) { o.active=true; o.done=false; if(o.group) o.group.visible=true; }
-    if (m.type==='escort') {
-      const o=(this.storyObjects||[]).find(x=>x.role==='scanner'); if(o){o.active=true;o.done=false;o.group.visible=true; this.missionTimer=m.duration||40;}
-    }
-    const cinematicKind = ['core','rush','blackout'].includes(m.type) || m.boss ? 'danger' : 'info';
-    this.playStoryMotion('MISSION UPDATE', [m.hud || m.label, m.rationale ? `작전 근거: ${m.rationale}` : ''].filter(Boolean).join(' · '), null, cinematicKind);
-  }
-
-  nearestStoryObject(max=3.2) {
-    let best=null,bestD=max;
-    for(const o of this.storyObjects||[]){ if(!o.active||o.done||o.door) continue; const d=Math.hypot(this.player.x-o.x,this.player.z-o.z); if(d<bestD){bestD=d;best=o;} }
-    return best;
-  }
-
-  updateStoryInteractionInput(dt) {
-    if(this.runMode!=='story'||!this.currentMission) return false;
-    const down=this.input.actionDown('heal'); const target=this.nearestStoryObject();
-    if(!down){ this.storyInteractionHold=0; this.storyInteractionTarget=null; const el=document.getElementById('story-action-overlay'); if(el)el.style.display='none'; return false; }
-    if(!target) return false;
-    if(this.storyInteractionTarget!==target){this.storyInteractionTarget=target;this.storyInteractionHold=0;}
-    this.storyInteractionHold+=dt; const need=Number(this.currentMission.hold)||1.6; const pct=clamp(this.storyInteractionHold/need,0,1);
-    const el=document.getElementById('story-action-overlay'); if(el){el.style.display='block';el.querySelector('b').textContent=`E · ${target.label}`;const reason=el.querySelector('small');if(reason)reason.textContent=target.purpose||this.currentMission.rationale||'';el.querySelector('span').textContent=`${Math.round(pct*100)}%`;}
-    if(pct>=1){this.completeStoryInteraction(target);this.storyInteractionHold=0;this.storyInteractionTarget=null;if(el)el.style.display='none';}
-    return true;
-  }
-
-  setStoryObjectCollision(o, enabled) {
-    if (!o?.collider) return;
-    o.collider.alive = !!enabled;
-    if (!o.collider.dynamicStory) {
-      this.collisionIndexDirty = true;
-      this.markNavDirty();
-    }
-  }
-
-  beginCargoCarry(cargo) {
-    if (!cargo) return;
-    cargo.carrying = true;
-    cargo.restoreColliderWhenClear = false;
-    // 화물은 플레이어 뒤를 따라붙기 때문에 기존 크기의 충돌체를 유지하면
-    // 플레이어 본체와 겹쳐 이동을 완전히 막는다. 운반 중에는 시각 오브젝트만 따라오게 한다.
-    this.setStoryObjectCollision(cargo, false);
-  }
-
-  finishCargoCarry(cargo, destination) {
-    if (!cargo || !destination) return;
-    cargo.carrying = false;
-    cargo.restoreColliderWhenClear = true;
-    this.moveStoryObjectTo(cargo, destination.x, destination.z);
-    if (cargo.group) cargo.group.position.y = 0;
-    // 적재 직후 플레이어가 플랫폼 안에 있으므로 바로 충돌을 켜면 다시 갇힐 수 있다.
-    // 충분히 벗어난 다음 updateStorySystems에서 충돌을 복구한다.
-    this.setStoryObjectCollision(cargo, false);
-  }
-
-  updateDeliveredCargoCollision(cargo) {
-    if (!cargo?.restoreColliderWhenClear || !cargo.collider || !this.player) return;
-    const clearance = Math.max(cargo.collider.w || 0, cargo.collider.d || 0) * .55 + this.player.radius + .75;
-    if (Math.hypot(this.player.x - cargo.x, this.player.z - cargo.z) < clearance) return;
-    cargo.restoreColliderWhenClear = false;
-    this.setStoryObjectCollision(cargo, true);
-  }
-
-  completeStoryInteraction(o) {
-    const m=this.currentMission; if(!m||o.done)return;
-    if(m.type==='cargo'){this.storySequence.cargoAttached=true;o.done=true;this.beginCargoCarry(o);this.showToast('화물 연결 완료 · 적재 지점으로 운반');}
-    else if(m.type==='rescue'){this.storySequence.rescued=true;o.done=true;this.showToast('생존자 확보 · 구조 지점으로 호위');}
-    else {o.done=true;this.showToast(`${o.label} 작동 완료`);}
-    this.audio.storyObjectCue(o.role, 'complete');
-    if(o.role==='relay') {
-      const door=(this.storyObjects||[]).find(x=>x.role==='blastDoor'&&x.door);
-      if(door){
-        door.active=true; door.done=true;
-        this.audio.storyObjectCue('blastDoor','complete');
-        this.playStoryMotion('격리동 방폭 셔터 개방','중계 허브의 생체 인증이 복구됐다. 북측 격리동으로 향하는 유일 통로가 열린다.',door,'info');
-        this.queueDialogue('격리국 관제|셔터 너머 격리동의 구조 신호를 확인했다. 이제 오세현에게 접근할 수 있다.', { delay:.35 });
-      }
-    }
-    if(o.group){o.completeAnim=1.1;o.group.scale.y=.92; setTimeout(()=>{if(o.group)o.group.scale.y=1;},180);}
-    const objectLine = STORY_DIALOGUES[this.storyChapter?.id]?.object?.[o.role];
-    if (objectLine) this.queueDialogue(objectLine, { delay: .18 });
-    if(o.role!=='relay') this.playStoryMotion(`${o.label} 작동`, o.result || m.outcome || m.hud || '장치 작동으로 다음 절차가 가능해졌다.', o, 'info');
-    if(m.type==='door'){
-      const all=(this.storyObjects||[]).filter(x=>x.active&&x.role===m.target&&!x.door);
-      if(all.length&&all.every(x=>x.done)){const door=(this.storyObjects||[]).find(x=>x.role===m.target&&x.door);if(door){door.active=true;door.done=true;this.audio.storyObjectCue(door.role,'complete');this.playStoryMotion('격리문 개방','잠금 장치가 해제되었습니다.',door);}}
-    }
-  }
-
-  updateStorySystems(dt) {
-    if(this.runMode!=='story'||!this.storyObjects)return;
-    const t=now();
-    const survivorForHud = this.getStorySurvivor();
-    if (survivorForHud) {
-      survivorForHud.invulnerableTimer = Math.max(0, (survivorForHud.invulnerableTimer || 0) - dt);
-      survivorForHud.hitFlash = Math.max(0, (survivorForHud.hitFlash || 0) - dt);
-      const model = survivorForHud.group?.userData?.model;
-      if (model && !survivorForHud.dead) {
-        const hit = survivorForHud.hitFlash > 0 ? Math.sin((survivorForHud.hitFlash / .24) * Math.PI * 4) * .035 : 0;
-        model.position.x = hit;
-        model.rotation.z = -hit * 1.8;
-      }
-    }
-    this.updateStorySurvivorHealthHud(dt);
-    for(const o of this.storyObjects){
-      if(o.group&&o.active&&!o.done&&!o.door&&o.role!=='survivor'){o.group.rotation.y=Math.sin(t*1.8+o.pulse)*.035;o.group.position.y=o.baseY+Math.sin(t*2.4+o.pulse)*.035;}
-      if(o.rotor){const speed=o.done?5.8:(o.active?2.6:.45);o.rotor.rotation.y+=dt*speed;o.rotor.rotation.z+=dt*speed*.28;}
-      if(o.completeAnim>0&&o.group){o.completeAnim=Math.max(0,o.completeAnim-dt);const k=o.completeAnim/1.1;o.group.scale.set(1+Math.sin(k*Math.PI*5)*.035,1+Math.sin(k*Math.PI*4)*.06,1+Math.sin(k*Math.PI*5)*.035);if(o.completeAnim<=0)o.group.scale.set(1,1,1);}
-      if(o.group){for(const child of o.group.children||[]){if(child.material?.emissiveIntensity!==undefined)child.material.emissiveIntensity=(o.active&&!o.done)?(.7+Math.sin(t*4+o.pulse)*.25):(o.done?.35:.15);}}
-      const m=this.currentMission;
-      const destinationActive = (m?.type==='cargo'&&this.storySequence?.cargoAttached&&o.role==='cargoZone') || (m?.type==='rescue'&&this.storySequence?.rescued&&o.role==='exit');
-      if(o.marker){
-        const visible=(o.active&&!o.done&&!o.door)||destinationActive;
-        o.marker.visible=visible;
-        if(visible){const d=Math.hypot(this.player.x-o.x,this.player.z-o.z);const pulse=1+Math.sin(t*4+o.pulse)*.12;o.marker.position.set(o.x,.02+Math.sin(t*2.6+o.pulse)*.08,o.z);o.marker.rotation.y+=dt*.8;o.marker.scale.setScalar(pulse*(d<8?1.22:1));if(o.markerRing?.material)o.markerRing.material.opacity=d<10?.92:.58;if(o.markerArrow?.material)o.markerArrow.material.opacity=d<10?1:.72;}
-      }
-      if(o.door&&o.done&&o.obstacle?.alive){o.openT=clamp((o.openT||0)+dt*.55,0,1);o.group.position.y=WORLD.WALL_HEIGHT/2+o.openT*(WORLD.WALL_HEIGHT+1);if(o.stripe)o.stripe.position.y=2.15+o.openT*(WORLD.WALL_HEIGHT+1);if(o.doorVisual)o.doorVisual.position.y=o.openT*(WORLD.WALL_HEIGHT+1);if(o.openT>=1){o.obstacle.alive=false;this.collisionIndexDirty=true;this.markNavDirty();}}
-    }
-    this.updateStoryCinematic(dt);
-    const m=this.currentMission;
-    if(!m)return;
-    if(m.type==='cargo'&&this.storySequence?.cargoAttached){const cargo=this.storyObjects.find(o=>o.role==='cargo');if(cargo){if(!this.storySequence?.cargoDelivered){if(cargo.collider?.alive)this.beginCargoCarry(cargo);const fx=-Math.sin(this.yaw),fz=-Math.cos(this.yaw);const carryDistance=1.72;cargo.x=this.player.x-fx*carryDistance;cargo.z=this.player.z-fz*carryDistance;this.moveStoryObjectTo(cargo,cargo.x,cargo.z);if(cargo.group){cargo.group.position.y=.25;cargo.group.rotation.y=this.yaw;}const d=cargo.destination;if(d&&Math.hypot(this.player.x-d.x,this.player.z-d.z)<3.2){this.storySequence.cargoDelivered=true;this.finishCargoCarry(cargo,d);this.audio.storyObjectCue('cargoZone','complete');this.playStoryMotion('화물 적재 완료','기록 데이터가 분석 장치로 전송됩니다.',{x:d.x,y:1.2,z:d.z});}}else this.updateDeliveredCargoCollision(cargo);}}
-    if(m.type==='rescue'&&this.storySequence?.rescued&&!this.storySequence?.survivorExtracted){const sv=this.storyObjects.find(o=>o.role==='survivor');if(sv){const reachedPlayer=this.stepStoryMover(sv,this.player.x,this.player.z,2.45,dt,.56,1.65);const followModel=sv.group?.userData?.model;if(followModel){sv.followPhase=(sv.followPhase||0)+dt*(reachedPlayer?2.2:6.5);const walk=Math.min(1,Math.hypot(this.player.vx||0,this.player.vz||0)*.55+(reachedPlayer?0:.35));const armSwing=Math.sin(sv.followPhase)*.24*walk;const legSwing=Math.sin(sv.followPhase)*.20*walk;if(followModel.userData?.leftArm) followModel.userData.leftArm.rotation.x=armSwing;if(followModel.userData?.rightArm) followModel.userData.rightArm.rotation.x=-armSwing;if(followModel.userData?.leftLeg) followModel.userData.leftLeg.rotation.x=-legSwing;if(followModel.userData?.rightLeg) followModel.userData.rightLeg.rotation.x=legSwing;}const dx=this.player.x-sv.x,dz=this.player.z-sv.z;if(Math.hypot(dx,dz)>.2&&sv.group) sv.group.rotation.y=Math.atan2(dx,dz);const dest=sv.destination;if(dest&&Math.hypot(sv.x-dest.x,sv.z-dest.z)<3){this.storySequence.survivorExtracted=true;this.audio.storyObjectCue('exit','complete');this.playStoryMotion('생존자 구조 완료','격리국 구조팀이 인계받았습니다.',{x:dest.x,y:1.2,z:dest.z});}}}
-    if(m.type==='escort'){const sc=this.storyObjects.find(o=>o.role==='scanner');if(sc&&sc.destination){this.stepStoryMover(sc,sc.destination.x,sc.destination.z,1.28,dt,.68,.8);const dx=sc.destination.x-sc.x,dz=sc.destination.z-sc.z;if(Math.hypot(dx,dz)>.2&&sc.group) sc.group.rotation.y=Math.atan2(dx,dz);}}
-  }
-
-  parseDialogue(raw = '') {
-    const line = String(raw || '').trim();
-    const pipe = line.indexOf('|');
-    if (pipe > 0) return { speaker: line.slice(0, pipe).trim(), text: line.slice(pipe + 1).trim() };
-    const colon = line.indexOf(':');
-    if (colon > 0 && colon < 18) return { speaker: line.slice(0, colon).trim(), text: line.slice(colon + 1).trim() };
-    return { speaker: '격리국 통신', text: line };
-  }
-
-  queueDialogue(raw, options = {}) {
-    if (!raw || this.runMode !== 'story') return;
-    const parsed = typeof raw === 'string' ? this.parseDialogue(raw) : raw;
-    if (!parsed?.text) return;
-    this.dialogueQueue.push({ ...parsed, delay: Math.max(0, Number(options.delay) || 0), duration: Number(options.duration) || clamp(2.5 + parsed.text.length * .055, 3.2, 7.2) });
-  }
-
-  queueStoryDialogueSequence(lines = [], initialDelay = 0) {
-    let delay = Math.max(0, initialDelay);
-    for (const line of lines) { this.queueDialogue(line, { delay }); delay = .45; }
-  }
-
-  updateDialogue(dt) {
-    if (this.runMode !== 'story') { UI.storyDialogue?.classList.remove('show'); return; }
-    if (this.dialogueActive) {
-      this.dialogueTimer -= dt;
-      if (this.dialogueTimer <= 0) {
-        this.dialogueActive = null;
-        UI.storyDialogue?.classList.remove('show');
-      }
-      return;
-    }
-    const next = this.dialogueQueue?.[0];
-    if (!next) return;
-    next.delay -= dt;
-    if (next.delay > 0) return;
-    this.dialogueQueue.shift();
-    this.dialogueActive = next;
-    this.dialogueTimer = next.duration;
-    if (UI.storyDialogueSpeaker) UI.storyDialogueSpeaker.textContent = next.speaker;
-    if (UI.storyDialogueText) UI.storyDialogueText.textContent = next.text;
-    UI.storyDialogue?.classList.add('show');
-    this.audio.radioCue(next.speaker);
-    this.audio.duckMusic(.34, Math.max(.4, next.duration - .5), .65);
-  }
-
-  storyMarkerIcon(role = '') {
-    return ({ relay:'⌁', survivor:'人', exit:'✚', cargo:'▣', cargoZone:'□', generator:'⚡', blastDoor:'▥', beacon:'△', scanner:'◎', citadelDoor:'◈', machine:'⌬', core:'◆' })[role] || '◆';
-  }
-
-  getCurrentStoryTarget() {
-    if (this.runMode !== 'story' || !this.currentMission) return null;
-    const m = this.currentMission;
-    if (m.type === 'core') {
-      const cores = (this.objectiveCores || []).filter(c => c.alive);
-      if (cores.length) { const nearest = cores.reduce((a,b) => dist2(this.player.x,this.player.z,a.x,a.z) < dist2(this.player.x,this.player.z,b.x,b.z) ? a : b); return { ...nearest, role:'core', label:'감염 코어' }; }
-    }
-    if (m.type === 'cargo' && this.storySequence?.cargoAttached) {
-      const zone = (this.storyObjects || []).find(o => o.role === 'cargoZone'); if (zone) return zone;
-    }
-    if (m.type === 'rescue' && this.storySequence?.rescued) {
-      const exit = (this.storyObjects || []).find(o => o.role === 'exit'); if (exit) return exit;
-    }
-    const candidates = (this.storyObjects || []).filter(o => o.active && !o.done && !o.door);
-    if (!candidates.length) return null;
-    return candidates.reduce((a,b) => dist2(this.player.x,this.player.z,a.x,a.z) < dist2(this.player.x,this.player.z,b.x,b.z) ? a : b);
-  }
-
-  updateStoryTargetMarker() {
-    const target = this.getCurrentStoryTarget();
-    const el = UI.storyTargetMarker;
-    if (!el || !target || !this.player || !this.camera) {
-      el?.classList.remove('show', 'offscreen', 'onscreen', 'turn-left', 'turn-right', 'behind');
-      this.storyTargetOffscreenSide = null;
-      this.storyTargetKey = '';
-      return;
-    }
-    const dx = target.x - this.player.x, dz = target.z - this.player.z;
-    const distance = Math.hypot(dx, dz);
-    const desired = Math.atan2(-dx, -dz);
-    const delta = Math.atan2(Math.sin(desired - this.yaw), Math.cos(desired - this.yaw));
-    const v = this.storyMarkerVec.set(target.x, target.role === 'core' ? 1.2 : 1.8, target.z).project(this.camera);
-    let x = (v.x * .5 + .5) * window.innerWidth;
-    let y = (-v.y * .5 + .5) * window.innerHeight;
-    const marginX = Math.min(76, Math.max(48, window.innerWidth * .055));
-    const marginTop = 62;
-    const marginBottom = Math.max(84, window.innerHeight * .12);
-    const behind = Math.abs(delta) > Math.PI * .68;
-    const visibleDepth = v.z >= -1 && v.z <= 1;
-    const onscreen = visibleDepth && !behind && x >= marginX && x <= window.innerWidth - marginX && y >= marginTop && y <= window.innerHeight - marginBottom;
-    const targetKey = `${target.role || 'target'}:${target.label || ''}:${Math.round(target.x * 2)}:${Math.round(target.z * 2)}`;
-    if (this.storyTargetKey !== targetKey) {
-      this.storyTargetKey = targetKey;
-      this.storyTargetOffscreenSide = null;
-      this.storyTargetLastScreenSide = null;
-    }
-    el.classList.remove('offscreen', 'onscreen', 'turn-left', 'turn-right', 'behind');
-    if (onscreen) {
-      x = clamp(x, marginX, window.innerWidth - marginX);
-      y = clamp(y, marginTop, window.innerHeight - marginBottom);
-      this.storyTargetLastScreenSide = x < window.innerWidth * .5 ? 'left' : 'right';
-      this.storyTargetOffscreenSide = null;
-      el.classList.add('onscreen');
-      if (UI.storyTargetDirection) UI.storyTargetDirection.textContent = '';
-      if (UI.storyTargetIcon) UI.storyTargetIcon.textContent = this.storyMarkerIcon(target.role);
-    } else {
-      if (!this.storyTargetOffscreenSide) {
-        this.storyTargetOffscreenSide = this.storyTargetLastScreenSide || resolveStoryTargetScreenSide(dx, dz, this.yaw);
-      }
-      const side = this.storyTargetOffscreenSide;
-      const edge = Math.min(118, Math.max(72, window.innerWidth * .075));
-      x = side === 'left' ? edge : window.innerWidth - edge;
-      y = behind ? window.innerHeight * .72 : clamp(y, window.innerHeight * .26, window.innerHeight * .66);
-      el.classList.add('offscreen', side === 'left' ? 'turn-left' : 'turn-right');
-      if (behind) el.classList.add('behind');
-      if (UI.storyTargetDirection) UI.storyTargetDirection.textContent = behind
-        ? (side === 'left' ? '↶ 뒤쪽 · 왼쪽으로 회전' : '뒤쪽 · 오른쪽으로 회전 ↷')
-        : (side === 'left' ? '← 왼쪽으로 회전' : '오른쪽으로 회전 →');
-      if (UI.storyTargetIcon) UI.storyTargetIcon.textContent = side === 'left' ? '◀' : '▶';
-    }
-    el.style.left = `${x}px`;
-    el.style.top = `${y}px`;
-    el.classList.add('show');
-    if (UI.storyTargetLabel) UI.storyTargetLabel.textContent = target.label || this.currentMission.label || '목표';
-    if (UI.storyTargetDistance) UI.storyTargetDistance.textContent = `${Math.round(distance)}m`;
-  }
-
-  isStoryControlLocked() {
-    return this.runMode === 'story' && !!this.storyCinematicState;
-  }
-
-  freezePlayerForStoryCinematic() {
-    this.input.discardLook(80);
-    this.input.consumeWheel();
-    this.adsTarget = 0;
-    this.moveIntensity = 0;
-    this.jumpHeld = false;
-    this.storyInteractionHold = 0;
-    this.storyInteractionTarget = null;
-    if (this.player) {
-      this.player.vx = 0;
-      this.player.vz = 0;
-    }
-    const action = document.getElementById('story-action-overlay');
-    if (action) action.style.display = 'none';
-  }
-
-  isStoryCinematicLineClear(from, targetPoint, target = null) {
-    if (!from || !targetPoint) return false;
-    const dx = targetPoint.x - from.x, dz = targetPoint.z - from.z;
-    const length = Math.hypot(dx, dz);
-    if (length < .35) return true;
-    const nx = dx / length, nz = dz / length;
-    for (const obstacle of this.obstacles || []) {
-      if (!obstacle?.alive) continue;
-      if (target?.obstacle === obstacle || target?.collider === obstacle) continue;
-      if (Math.hypot((obstacle.x || 0) - targetPoint.x, (obstacle.z || 0) - targetPoint.z) < Math.max(obstacle.w || 0, obstacle.d || 0) * .55 + .45) continue;
-      const hit = this.rayAabb2D(from.x, from.z, nx, nz,
-        obstacle.x - obstacle.w / 2 - .08, obstacle.z - obstacle.d / 2 - .08,
-        obstacle.x + obstacle.w / 2 + .08, obstacle.z + obstacle.d / 2 + .08);
-      if (hit !== null && hit > .08 && hit < length - .58) return false;
-    }
-    return true;
-  }
-
-  getStoryCinematicCameraPose(target, force = false) {
-    if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.z) || !this.player || !this.map) return null;
-    const targetPoint = new THREE.Vector3(target.x, Number(target.y) || (target.role === 'survivor' ? 1.25 : 1.5), target.z);
-    const playerEye = new THREE.Vector3(this.player.x, this.getEyeY(), this.player.z);
-    const distance = Math.hypot(target.x - this.player.x, target.z - this.player.z);
-    const visibleFromPlayer = this.isStoryCinematicLineClear(playerEye, targetPoint, target);
-    if (!force && !target.forceCutaway && visibleFromPlayer && distance < 10.5) return null;
-
-    const baseAngle = Math.atan2(this.player.z - target.z, this.player.x - target.x);
-    const angles = [baseAngle, baseAngle + Math.PI/2, baseAngle - Math.PI/2, baseAngle + Math.PI, 0, Math.PI/2, Math.PI, -Math.PI/2];
-    const half = this.map.size / 2 - 1.2;
-    let best = null;
-    for (const radius of [5.6, 7.2, 4.4]) {
-      for (const height of [3.45, 4.15, 2.75]) {
-        for (const angle of angles) {
-          const position = new THREE.Vector3(target.x + Math.cos(angle) * radius, height, target.z + Math.sin(angle) * radius);
-          if (Math.abs(position.x) > half || Math.abs(position.z) > half || this.collides(position.x, position.z, .34)) continue;
-          if (!this.isStoryCinematicLineClear(position, targetPoint, target)) continue;
-          const score = position.distanceToSquared(playerEye) + Math.abs(height - 3.45) * 2.2;
-          if (!best || score < best.score) best = { position, score };
-        }
-      }
-    }
-    if (!best) return null;
-    const matrix = new THREE.Matrix4().lookAt(best.position, targetPoint, new THREE.Vector3(0, 1, 0));
-    return {
-      position: best.position,
-      quaternion: new THREE.Quaternion().setFromRotationMatrix(matrix),
-      targetPoint,
-      label: target.cameraLabel || target.label || '시설 감시 카메라'
-    };
-  }
-
-  startStoryCinematicClip(clip) {
-    if (!clip || this.runMode !== 'story') return;
-    const duration = clamp(Number(clip.duration) || 2.75, 2.2, 5.2);
-    const target = clip.target && Number.isFinite(clip.target.x) ? clip.target : null;
-    let focusYaw = this.yaw;
-    let focusPitch = this.pitch;
-    if (target && this.player) {
-      const dx = target.x - this.player.x;
-      const dz = target.z - this.player.z;
-      const horizontal = Math.max(.001, Math.hypot(dx, dz));
-      focusYaw = Math.atan2(-dx, -dz);
-      focusPitch = clamp(Math.atan2((Number(target.y) || 1.35) - this.getEyeY(), horizontal), -.62, .72);
-    }
-    const cutawayPose = target ? this.getStoryCinematicCameraPose(target, clip.cameraStyle === 'cctv') : null;
-    this.storyCinematicState = {
-      elapsed: 0,
-      time: duration,
-      duration,
-      lastTickAt: now(),
-      target,
-      startYaw: this.yaw,
-      startPitch: this.pitch,
-      focusYaw,
-      focusPitch,
-      cutawayPose,
-      cutawayActive:false,
-      title: clip.title,
-      copy: clip.copy,
-      kind: clip.kind || 'info'
-    };
-    this.input.resetTransient();
-    this.freezePlayerForStoryCinematic();
-    this.mobile?.setGameplayActive(false);
-    this.showCenterAlert(clip.title, clip.copy, clip.kind === 'danger' ? 'danger' : 'info', duration - .2);
-    this.storyEventTime = Math.max(this.storyEventTime || 0, duration * .5);
-    this.audio.storyStinger(clip.kind || 'info');
-    if (UI.storyCinematicTitle) UI.storyCinematicTitle.textContent = clip.title || 'MISSION UPDATE';
-    if (UI.storyCinematicCopy) UI.storyCinematicCopy.textContent = clip.copy || '';
-    UI.storyCinematic?.classList.add('show');
-    UI.storyCinematic?.classList.toggle('cctv-feed', !!cutawayPose);
-    if (UI.storyCinematic) UI.storyCinematic.dataset.cameraLabel = cutawayPose?.label || 'R-07 헬멧 카메라';
-    UI.storyCinematic?.setAttribute('aria-hidden', 'false');
-    UI.storyCinematic?.style.setProperty('--cinematic-progress', '0%');
-    document.body.classList.add('story-sequence-active');
-  }
-
-  finishStoryCinematicClip() {
-    const state = this.storyCinematicState;
-    if (state) {
-      this.yaw = state.startYaw;
-      this.pitch = state.startPitch;
-    }
-    this.storyCinematicState = null;
-    this.input.resetTransient();
-    const next = this.storyCinematicQueue.shift();
-    if (next) {
-      this.startStoryCinematicClip(next);
-      return;
-    }
-    UI.storyCinematic?.classList.remove('show','cctv-feed','cctv-switch');
-    UI.storyCinematic?.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('story-sequence-active');
-    if (this.viewWeapon) this.viewWeapon.visible = true;
-    if (this.pauseAfterStoryCinematic || (!this.isTouchInputActive() && !this.input.locked)) {
-      this.pauseAfterStoryCinematic = false;
-      this.pause();
-      return;
-    }
-    if (this.isTouchInputActive() && this.running && !this.paused && !this.gameOver) this.mobile?.setGameplayActive(true);
-  }
-
-  updateStoryCinematic(dt) {
-    const state = this.storyCinematicState;
-    if (!state) return;
-    this.freezePlayerForStoryCinematic();
-    // 메인 루프의 저 FPS 보호용 dt 상한과 분리한다. 저사양에서 3초 연출이
-    // 수십 초로 늘어나지 않되, 백그라운드 탭 복귀 시 한 번에 건너뛰지도 않는다.
-    const tick = now();
-    const cinematicStep = clamp(tick - (state.lastTickAt || tick), 0, .25);
-    state.lastTickAt = tick;
-    state.elapsed += cinematicStep;
-    state.time = Math.max(0, state.duration - state.elapsed);
-    const progress = clamp(state.elapsed / state.duration, 0, 1);
-    UI.storyCinematic?.style.setProperty('--cinematic-progress', `${Math.round(progress * 100)}%`);
-    const smooth = value => value * value * (3 - 2 * value);
-    let cameraT = 1;
-    if (progress < .32) cameraT = smooth(progress / .32);
-    else if (progress > .76) cameraT = 1 - smooth((progress - .76) / .24);
-    if (state.cutawayPose) {
-      // 원격 CCTV 컷은 벽을 통과하는 보간을 하지 않는다. 짧은 전환 프레임 뒤
-      // 안전한 카메라 지점으로 즉시 전환하고, 종료 직전에 헬멧 시점으로 복귀한다.
-      state.cutawayActive = progress >= .10 && progress <= .86;
-      UI.storyCinematic?.classList.toggle('cctv-switch', progress < .15 || progress > .82);
-    } else {
-      state.cutawayActive = false;
-      this.yaw = this.lerpAngle(state.startYaw, state.focusYaw, cameraT);
-      this.pitch = state.startPitch + (state.focusPitch - state.startPitch) * cameraT;
-    }
-    if (state.time <= 0) {
-      this.finishStoryCinematicClip();
-    }
-  }
-
-  playStoryMotion(title,copy,target = null, kind = 'info') {
-    const focus = target || this.getCurrentStoryTarget();
-    const resolvedTarget = focus && Number.isFinite(focus.x) ? focus : null;
-    const forceCctv = !!resolvedTarget?.forceCutaway || !!resolvedTarget?.door;
-    const clip = { title: title || 'MISSION UPDATE', copy: copy || '', target: resolvedTarget, kind, cameraStyle: forceCctv ? 'cctv' : 'auto', duration: kind === 'danger' ? 3.2 : 2.9 };
-    const previous = this.storyCinematicQueue[this.storyCinematicQueue.length - 1] || this.storyCinematicState;
-    if (previous?.title === clip.title && previous?.copy === clip.copy) return;
-    if (this.storyCinematicState) this.storyCinematicQueue.push(clip);
-    else this.startStoryCinematicClip(clip);
-  }
-
-  getMissionForWave(w) {
-    if (this.runMode === 'story' && this.storyChapter) {
-      const mission = this.storyChapter.missions?.[Math.max(0, Number(w) - 1)];
-      return mission ? { ...mission, story: true } : { type: 'normal', label: '잔존 개체 제거', hud: '잔존 개체를 제거하라', rationale:'다음 절차를 안전하게 실행할 작업 구역이 필요하다.', outcome:'구역이 확보됐다.', story: true };
-    }
-    // 서로 다른 배수 규칙이 겹쳐 일부 미션이 사라지던 구조를 없앴다.
-    // 6웨이브마다 네 종류가 순서대로 순환해 다음 특수전도 예측할 수 있다.
-    if (w >= 6 && w % 6 === 0) {
-      const type = ['survive', 'rush', 'core', 'blackout'][(Math.floor(w / 6) - 1) % 4];
-      if (type === 'survive') return { type, label: '제한 시간 버티기', short: 'SURVIVE', duration: clamp(38 + w * 1.8, 45, 70), desc: '제한 시간 동안 버티면 웨이브가 끝난다. 너무 오래 한 장소에 갇히지 마라.' };
-      if (type === 'rush') return { type, label: '폭발 좀비 러시', short: 'RUSH', desc: '폭발 좀비 비율이 높아진다. 가까워지기 전에 먼저 끊어라.' };
-      if (type === 'core') return { type, label: '감염 코어 파괴', short: 'CORE', desc: '맵에 생성된 감염 코어를 모두 부숴라. 적을 전부 잡지 않아도 코어만 부수면 클리어된다.' };
-      return { type, label: '조명 불안정 웨이브', short: 'LIGHTS', desc: '조명이 불안정하다. 미니맵과 발소리를 같이 봐라.' };
-    }
-    return { type: 'normal', label: '전멸', short: 'CLEAR', desc: '몰려오는 적을 모두 처치해라.' };
-  }
-
-  startMissionForWave(plannedMission = null) {
-    this.cleanupObjectiveCores(false);
-    this.currentMission = plannedMission || this.getMissionForWave(this.wave);
-    this.missionTimer = this.currentMission.duration || 0;
-    this.missionCompletePending = false;
-
-    this.activateStoryMissionObjects();
-    if (['interact','generator','cargo','rescue','door','escort'].includes(this.currentMission.type)) {
-      const floor = Number(this.currentMission.minSpawn) || 12;
-      this.spawnQueue = Math.max(this.spawnQueue, floor);
-      this.showCenterAlert(this.currentMission.label, this.currentMission.hud || '목표 지점과 상호작용하라.', 'info', 3.2);
-    } else if (this.currentMission.type === 'survive') {
-      const floor = Number(this.currentMission.minSpawn) || (this.runMode === 'story' ? 14 : 36 + Math.floor(this.wave * 2.2));
-      this.spawnQueue = Math.max(this.spawnQueue, floor);
-      this.showCenterAlert(this.currentMission.story ? this.currentMission.label : '미션 웨이브: 제한 시간 버티기', `${Math.ceil(this.missionTimer)}초 동안 살아남아라. 적을 전부 죽일 필요는 없다.`, 'danger', 3.2);
-    } else if (this.currentMission.type === 'core') {
-      const floor = Number(this.currentMission.minSpawn) || 18;
-      this.spawnQueue = Math.max(floor, Math.round(this.spawnQueue * .72));
-      const count = clamp(Number(this.currentMission.coreCount) || (2 + Math.floor(this.wave / 8)), 1, 5);
-      this.spawnObjectiveCores(count);
-      this.showCenterAlert(this.currentMission.story ? this.currentMission.label : '미션 웨이브: 감염 코어 파괴', `${count}개의 코어를 모두 부숴라. 코어를 부수면 바로 웨이브가 끝난다.`, 'danger', 3.4);
-    } else if (this.currentMission.type === 'rush') {
-      const floor = Number(this.currentMission.minSpawn) || (28 + Math.floor(this.wave * 2.4));
-      this.spawnQueue = Math.max(this.spawnQueue, floor);
-      this.showCenterAlert(this.currentMission.story ? this.currentMission.label : '특수 웨이브: 폭발 좀비 러시', this.currentMission.hud || '노란 폭발 좀비가 많이 섞인다. 거리 유지가 핵심이다.', 'danger', 3.0);
-    } else if (this.currentMission.type === 'blackout') {
-      const floor = Number(this.currentMission.minSpawn) || (26 + Math.floor(this.wave * 2.0));
-      this.spawnQueue = Math.max(this.spawnQueue, floor);
-      this.showCenterAlert(this.currentMission.story ? this.currentMission.label : '특수 웨이브: 조명 불안정', this.currentMission.hud || '형광등이 흔들린다. 소리와 미니맵으로 위치를 확인해라.', 'danger', 3.0);
-    }
-    if (this.currentMission.story && this.currentMission.type === 'normal') {
-      this.showCenterAlert(this.currentMission.label, this.currentMission.hud || '작전을 계속하라.', 'info', 2.8);
-    }
-    if (this.currentMission.story) {
-      const mission = this.currentMission;
-      const extra = STORY_DIALOGUES[this.storyChapter?.id]?.mission?.[Math.max(0, this.wave - 1)];
-      setTimeout(() => {
-        if (!this.running || this.gameOver || this.currentMission !== mission) return;
-        if (mission.transmission) this.queueDialogue(mission.transmission, { delay: 0 });
-        if (extra && extra !== mission.transmission) this.queueDialogue(extra, { delay: .55 });
-      }, 650);
-    }
-  }
-
-  missionObjectiveText() {
-    const m = this.currentMission;
-    if (!m) return '';
-    if (['interact','generator','door'].includes(m.type)) {
-      const active = (this.storyObjects || []).filter(o => o.active && !o.done && (!m.target || o.role === m.target));
-      return `${m.label}: ${active.length}개 남음 · 가까이서 E 길게`;
-    }
-    if (m.type === 'cargo') return `${m.label}: ${this.storySequence?.cargoAttached ? '운반 중 · 적재 지점으로 이동' : '화물에 접근해 E 길게'}`;
-    if (m.type === 'rescue') { const sv=this.getStorySurvivor(); const hp=sv?` · HP ${Math.ceil(Math.max(0,sv.hp||0))}/${Math.ceil(sv.maxHp||160)}`:''; return `${m.label}: ${this.storySequence?.rescued ? '생존자를 출구까지 호위' : '생존자에게 접근해 E 길게'}${hp}`; }
-    if (m.type === 'escort') return `${m.label}: ${Math.max(0, Math.ceil(this.missionTimer))}초 · 스캐너를 지켜라`;
-    if (m.type === 'survive') return `${m.story ? m.label : '미션'}: ${Math.ceil(this.missionTimer)}초 버티기`;
-    if (m.type === 'core') {
-      const left = (this.objectiveCores || []).filter(c => c.alive).length;
-      return `${m.story ? m.label : '미션'}: 감염 코어 ${left}개 남음`;
-    }
-    if (m.story) return m.hud || m.label || '';
-    if (m.type === 'normal') return '';
-    if (m.type === 'rush') return '특수: 폭발 좀비 러시';
-    if (m.type === 'blackout') return '특수: 조명 불안정';
-    return m.label || '';
-  }
+  missionObjectiveText() { return missionHint(this.currentMission,this.missionState,{remaining:this.spawnQueue+this.enemies.filter(e=>e.alive).length}); }
 
   updateMissionState(dt) {
-    const m = this.currentMission;
-    if (!m || this.rewardOpen || this.prepPhase || this.missionCompletePending) return false;
-    if (m.type === 'escort') {
-      this.missionTimer = Math.max(0, this.missionTimer - dt);
-      if (this.missionTimer <= 0) { this.finishMissionWave('ESCORT COMPLETE'); return true; }
-    } else if (['interact','generator','door'].includes(m.type)) {
-      const relevant = (this.storyObjects || []).filter(o => o.active && (!m.target || o.role === m.target));
-      if (relevant.length && relevant.every(o => o.done)) { this.finishMissionWave('OBJECTIVE COMPLETE'); return true; }
-    } else if (m.type === 'cargo') {
-      if (this.storySequence?.cargoDelivered) { this.finishMissionWave('CARGO SECURED'); return true; }
-    } else if (m.type === 'rescue') {
-      if (this.storySequence?.survivorExtracted) { this.finishMissionWave('SURVIVOR RESCUED'); return true; }
-    } else if (m.type === 'survive') {
-      this.missionTimer = Math.max(0, this.missionTimer - dt);
-      // keep pressure during survival without creating infinite buildup.
-      const alive = this.enemies.filter(e => e.alive).length;
-      const threshold = Number(m.refillThreshold) || 8;
-      const maxActive = Number(m.maxActive) || 34;
-      const refill = Number(m.refillAmount) || 4;
-      if (this.spawnQueue < threshold && alive < maxActive && this.missionTimer > 4) this.spawnQueue += refill;
-      if (this.missionTimer <= 0) {
-        this.finishMissionWave('SURVIVED');
-        return true;
-      }
-    } else if (m.type === 'core') {
-      if ((this.objectiveCores || []).length && this.objectiveCores.every(c => !c.alive)) {
-        this.finishMissionWave('CORES DESTROYED');
-        return true;
-      }
-    }
-    return false;
+    const m=this.currentMission;if(!m || this.rewardOpen || this.prepPhase || this.missionCompletePending || this.usesServerEnemyAuthority())return false;
+    const complete=tickMission(m,this.missionState,dt,{players:[{...this.player,alive:this.hp>0,interact:this.input.actionDown('interact')}],remaining:this.spawnQueue+this.enemies.filter(e=>e.alive).length,coresLeft:this.objectiveCores.filter(c=>c.alive).length,headshots:this.headshots,canInteract:(p,t)=>this.lineClear2D(p.x,p.z,t.x,t.z,.12)});
+    this.missionTimer=this.missionState.timer;
+    if(['survive','blackout','core','holdout','relay'].includes(m.type) && this.spawnQueue<3 && this.enemies.filter(e=>e.alive).length<m.maxActive && !complete)this.spawnQueue+=4;
+    if(complete){this.finishMissionWave();return true;}return false;
   }
 
-  finishMissionWave(title = 'MISSION CLEAR') {
-    if (this.missionCompletePending) return;
-    this.missionCompletePending = true;
-    this.spawnQueue = 0;
-    // Mission waves end immediately on objective clear. Remove leftovers so the reward/prep phase is safe.
-    for (const e of this.enemies || []) {
-      if (e.alive) {
-        e.alive = false;
-        if (e.mesh?.parent) this.scene.remove(e.mesh);
-      }
-    }
-    const missionResult = this.currentMission?.outcome || '현재 절차가 완료되어 다음 작전 단계가 가능해졌다.';
-    this.showCenterAlert(title, missionResult, 'info', 2.8);
-    if (this.runMode === 'story') this.playStoryMotion('작전 결과', missionResult, null, 'info');
-    const line = STORY_DIALOGUES[this.storyChapter?.id]?.complete?.[Math.max(0, Math.min((this.storyChapter?.waves || 1) - 1, this.wave - 1))];
-    if (this.runMode === 'story' && line) this.queueDialogue(line, { delay: .3 });
-    this.audio.storyStinger('info');
-    this.completeWave();
+  finishMissionWave() {
+    if(this.missionCompletePending)return;this.missionCompletePending=true;this.spawnQueue=0;
+    for(const e of this.enemies){e.alive=false;if(e.mesh?.parent)this.scene.remove(e.mesh);}
+    for(const p of this.projectiles){p.alive=false;p.dead=true;if(p.mesh?.parent)this.scene.remove(p.mesh);}this.projectiles=[];
+    this.audio.missionStinger('info');this.completeWave();
   }
 
   findCoreSpawnPoint(radius = 1.2) {
@@ -5821,7 +3583,6 @@ class Game {
       const x = rand(-half, half), z = rand(-half, half);
       if (this.rectCollides(x, z, radius * 2, radius * 2, .35)) continue;
       if (dist2(x, z, this.player.x, this.player.z) < 12 * 12) continue;
-      // 스토리 목표 코어는 플레이어가 실제로 도달할 수 있는 연결 구역에만 생성한다.
       // 벽 안쪽의 막힌 포켓에 생성되면 진행이 끊기므로, 랜덤 후보 단계부터 길 검사를 건다.
       if (this.player && !this.hasNavRouteToPlayer(x, z, Math.max(.62, radius + .12))) continue;
       let nearCore = false;
@@ -5860,7 +3621,7 @@ class Game {
 
   createObjectiveCore(x, z, i = 0) {
     if (this.quality?.simpleModels) {
-      const hp = 180 + this.wave * 20;
+      const hp = this.currentMission?.coreHp || 140;
       const body = new THREE.Mesh(this.geos.lowBox, new THREE.MeshBasicMaterial({ color: i % 2 ? 0xff5138 : 0xff9b3d }));
       body.userData.ultraSimple = true;
       body.position.set(x, .78, z);
@@ -5883,7 +3644,7 @@ class Game {
     group.position.set(x, 0, z);
     this.scene.add(group);
     this.spawnEnemySpawnFx(x, z, 'bomber');
-    return { kind: 'core', x, z, radius: .88, hp: 180 + this.wave * 20, maxHp: 180 + this.wave * 20, alive: true, mesh: group, body, ring, light: halo, phase: Math.random() * Math.PI * 2 };
+    return { kind: 'core', x, z, radius: .88, hp: this.currentMission?.coreHp || 140, maxHp: this.currentMission?.coreHp || 140, alive: true, mesh: group, body, ring, light: halo, phase: Math.random() * Math.PI * 2 };
   }
 
   cleanupObjectiveCores(withFx = true) {
@@ -5960,27 +3721,12 @@ class Game {
   }
 
   nextWave() {
-    this.rewardOpen = false;
-    this.prepPhase = false;
-    this.prepTimer = 0;
-    this.wave++;
-    const plannedMission = this.getMissionForWave(this.wave);
-    const storyFinal = this.runMode === 'story' && this.storyChapter && this.wave === this.storyChapter.waves;
-    this.storyBossPending = !!(storyFinal && plannedMission?.boss && this.storyChapter?.boss);
-    this.elitePending = this.storyBossPending || (this.runMode !== 'story' && this.wave >= 5 && this.wave % 5 === 0);
-    // v17 밸런스: 초반은 학습 가능하게 천천히, 후반은 너무 폭발하지 않게 완만하게 증가.
-    const mapThreat = this.map?.threatScale || 1;
-    const missionScale = clamp(Number(plannedMission?.spawnScale) || 1, .45, 1.35);
-    const base = Math.round((9 + this.wave * 3.65 + Math.sqrt(this.wave) * 2.2) * this.diff.spawn * mapThreat * missionScale);
-    this.spawnQueue = clamp(base, 8, 88);
-    this.spawnTimer = 0;
-    this.waveBreak = 0;
-    this.unlockWeapons();
-    this.startMissionForWave(plannedMission);
-    this.showToast(this.runMode === 'story'
-      ? `Chapter ${this.storyChapter.id} · ${this.wave}/${this.storyChapter.waves} · ${this.currentMission.label}`
-      : (this.currentMission && this.currentMission.type !== 'normal' ? `Wave ${this.wave} · ${this.currentMission.label}` : `Wave ${this.wave}`));
-    if (this.runMode !== 'story') this.showWaveTip();
+    if(this.usesServerEnemyAuthority())return;
+    this.rewardOpen=false;this.prepPhase=false;this.prepTimer=0;this.wave++;
+    const m=this.getMissionForWave(this.wave);this.elitePending=!!m.elite;
+    this.spawnQueue=waveSpawnCount(this.wave,this.diff,1,this.map.threatScale || 1);this.initialWaveCount=this.spawnQueue;this.spawnTimer=.4;this.waveBreak=0;
+    this.unlockWeapons();this.startMissionForWave(m);this.showWaveTip();
+    this.showToast('레벨 '+this.wave+' · '+m.label);
   }
 
   unlockWeapons() {
@@ -6032,8 +3778,8 @@ class Game {
     this.centerAlertTimer = time;
   }
 
-  showHeadshot() {
-    this.headshots = (this.headshots || 0) + 1;
+  showHeadshot(count = true) {
+    if (count) this.headshots = (this.headshots || 0) + 1;
     if (!UI.headshot) return;
     UI.headshot.classList.add('show');
     this.headshotTimer = .42;
@@ -6056,10 +3802,10 @@ class Game {
 
   showWaveTip() {
     const tips = [
-      { wave: 3, title: '러너 등장', body: '빠른 적이 섞인다. 뒤로만 걷지 말고 옆으로 빠지며 쏴라.' },
+      { wave: 2, title: '러너 등장', body: '빠른 적이 섞인다. 뒤로만 걷지 말고 옆으로 빠지며 쏴라.' },
       { wave: 4, title: '탱커 좀비 등장', body: '체력이 높다. 샷건·수류탄·헤드샷으로 처리하는 게 좋다.' },
       { wave: 7, title: '폭발 좀비 등장', body: '가까이 오면 터진다. 노란 적은 멀리서 먼저 제거해라.', tone: 'danger' },
-      { wave: 10, title: '실드 좀비 등장', body: '정면 몸통 사격은 약하게 들어간다. 머리나 측면을 노려라.' },
+      { wave: 8, title: '실드 좀비 등장', body: '정면 몸통 사격은 약하게 들어간다. 머리나 측면을 노려라.' },
       { wave: 15, title: '고밀도 웨이브', body: '설치 벽과 지뢰로 길목을 만들고, 균열술사는 우선 처치해라.', tone: 'danger' }
     ];
     const tip = tips.find(t => this.wave === t.wave && !this.waveTipShown.has(t.wave));
@@ -6068,51 +3814,9 @@ class Game {
     this.showCenterAlert(tip.title, tip.body, tip.tone || 'info', 3.0);
   }
 
-  combatTierWave() {
-    return this.runMode === 'story' && this.storyChapter
-      ? Math.max(1, (this.storyChapter.id - 1) * 3 + this.wave)
-      : this.wave;
-  }
+  combatTierWave() { return this.wave; }
 
-  pickEnemyTypeForWave() {
-    if (this.storyBossPending) {
-      this.storyBossPending = false;
-      return this.storyChapter?.boss || 'devil';
-    }
-    // v17 웨이브 밸런스: 새 적은 첫 등장 때 소량, 이후 조금씩만 증가한다.
-    // 일반 좀비는 끝까지 베이스 물량으로 남겨 Boxhead식 압박을 유지한다.
-    const w = this.combatTierWave();
-    if (this.currentMission?.type === 'rush') {
-      const pool = [
-        { type: 'zombie', w: 36 }, { type: 'runner', w: 18 }, { type: 'bomber', w: 44 },
-        { type: 'tank', w: w >= 12 ? 12 : 6 }, { type: 'devil', w: w >= 14 ? 10 : 4 }
-      ];
-      let total = pool.reduce((a, b) => a + b.w, 0);
-      let r = Math.random() * total;
-      for (const p of pool) { r -= p.w; if (r <= 0) return p.type; }
-      return 'bomber';
-    }
-    if (this.currentMission?.type === 'core') {
-      const pool = [{ type: 'zombie', w: 48 }, { type: 'runner', w: 22 }, { type: 'tank', w: 14 }, { type: 'shield', w: w >= 10 ? 12 : 0 }, { type: 'devil', w: 10 }].filter(p => p.w > 0);
-      let total = pool.reduce((a, b) => a + b.w, 0);
-      let r = Math.random() * total;
-      for (const p of pool) { r -= p.w; if (r <= 0) return p.type; }
-    }
-    const pool = [{ type: 'zombie', w: Math.max(54, 104 - w * 1.4) }];
-    if (w >= 3) pool.push({ type: 'runner', w: clamp(14 + (w - 3) * 1.35, 14, 34) });
-    if (w >= 4) pool.push({ type: 'tank', w: clamp(7 + (w - 4) * .85, 7, 22) });
-    if (w >= 5) pool.push({ type: 'devil', w: clamp(8 + (w - 5) * .95, 8, 26) });
-    if (w >= 7) pool.push({ type: 'bomber', w: clamp(5 + (w - 7) * .75, 5, 18) });
-    if (w >= 10) pool.push({ type: 'shield', w: clamp(6 + (w - 10) * .72, 6, 18) });
-    let total = pool.reduce((a, b) => a + b.w, 0);
-    let r = Math.random() * total;
-    for (const p of pool) {
-      r -= p.w;
-      if (r <= 0) return p.type;
-    }
-    return 'zombie';
-  }
-
+  pickEnemyTypeForWave() { return this.elitePending?this.currentMission.elite:pickEnemyType(this.wave,this.currentMission); }
 
   spawnEnemySpawnFx(x, z, type = 'zombie') {
     if (this.quality?.simpleModels) return;
@@ -6200,15 +3904,7 @@ class Game {
     return !!start && Number.isFinite(field.distance[start.i]);
   }
 
-  enemyStats(type) {
-    const scale = 1 + this.combatTierWave() * .075;
-    if (type === 'runner') return { hp: 20 * scale * this.diff.enemyHp, speed: 4.1 * this.diff.enemySpeed, damage: 13 * this.diff.enemyDamage, score: 18, radius: .46 };
-    if (type === 'devil') return { hp: 72 * scale * this.diff.enemyHp, speed: 1.85 * this.diff.enemySpeed, damage: 18 * this.diff.enemyDamage, score: 55, radius: .72 };
-    if (type === 'tank') return { hp: 128 * scale * this.diff.enemyHp, speed: 1.45 * this.diff.enemySpeed, damage: 18 * this.diff.enemyDamage, score: 42, radius: .74, wallPower: 1.85 };
-    if (type === 'bomber') return { hp: 28 * scale * this.diff.enemyHp, speed: 3.25 * this.diff.enemySpeed, damage: 16 * this.diff.enemyDamage, score: 30, radius: .50, blastRadius: 4.3, blastDamage: 88 * this.diff.enemyDamage };
-    if (type === 'shield') return { hp: 62 * scale * this.diff.enemyHp, speed: 2.05 * this.diff.enemySpeed, damage: 14 * this.diff.enemyDamage, score: 34, radius: .58, shielded: true };
-    return { hp: 31 * scale * this.diff.enemyHp, speed: 2.45 * this.diff.enemySpeed, damage: 10 * this.diff.enemyDamage, score: 10, radius: .48 };
-  }
+  enemyStats(type) { return getEnemyStats(type,this.wave,this.diff); }
 
   loop(frameTime = performance.now()) {
     requestAnimationFrame(this.loop);
@@ -6220,7 +3916,7 @@ class Game {
     const dtRaw = this.clock.getDelta();
     const dt = Math.min(dtRaw, this.effectiveQualityKey === 'ultra' ? .050 : .040);
     this.frameNumber++;
-    if (this.running && !this.paused && !this.gameOver) this.update(dt);
+    if (this.running && !this.paused && !this.gameOver && !this.connectionBlocked) this.update(dt);
     this.renderer.render(this.scene, this.camera);
     this.trackFps(dtRaw);
   }
@@ -6266,31 +3962,16 @@ class Game {
       this.updateFx(dt);
       this.updateHorrorLighting(dt);
       this.updateAdaptiveMusic(dt);
-      this.updateDialogue(dt);
+      
       if (updateHudNow) this.updateHud();
       if (updateMinimapNow) this.minimap.draw(this);
       return;
     }
-    if (this.isStoryControlLocked()) {
-      // 연출 중에는 플레이어·적·투사체·스폰을 모두 정지시킨다. 스토리 오브젝트와
-      // 카메라·조명·자막만 갱신해, 연출을 보는 동안 피격되거나 입력이 새는 일을 막는다.
-      this.freezePlayerForStoryCinematic();
-      this.updateStorySystems(dt);
-      this.updateDialogue(dt);
-      this.updateFx(dt);
-      this.updateHorrorLighting(dt);
-      this.updateAdaptiveMusic(dt);
-      this.updateCamera(dt);
-      this.updateStoryTargetMarker();
-      if (updateHudNow) this.updateHud();
-      if (updateMinimapNow) this.minimap.draw(this);
-      return;
-    }
+    
     this.updateReload(dt);
     this.mobile?.update(dt);
     this.handleInput(dt);
-    this.updateStorySystems(dt);
-    this.updateDialogue(dt);
+
     this.updateWallPreview();
     this.updatePlayerVertical(dt);
     const serverEnemyAuthority = this.usesServerEnemyAuthority();
@@ -6300,7 +3981,7 @@ class Game {
       this.updateSpawning(dt);
       this.updateEnemies(dt);
     }
-    if (!serverEnemyAuthority && this.runMode !== 'story') this.updateRandomItemBoxes(dt);
+    if (!serverEnemyAuthority) this.updateRandomItemBoxes(dt);
     this.updateProjectiles(dt);
     this.updateObjectiveCores(dt);
     this.updatePickups(dt);
@@ -6309,8 +3990,9 @@ class Game {
     this.updateHorrorLighting(dt);
     this.updateAdaptiveMusic(dt);
     this.updateCamera(dt);
-    this.updateStoryTargetMarker();
+    
     this.updateRemotePlayers(dt);
+    this.updateObjectiveMarker();
     if (updateHudNow) this.updateHud();
     if (updateMinimapNow) this.minimap.draw(this);
     this.net.sendInput();
@@ -6318,15 +4000,17 @@ class Game {
   }
 
   updateHorrorLighting(dt) {
+    const blackout = this.currentMission?.type === 'blackout' && !this.prepPhase && !this.rewardOpen;
+    for (const light of this.scene.children) if (light.isLight && Number.isFinite(light.userData.baseIntensity)) light.intensity = light.userData.baseIntensity * (blackout ? .58 : 1);
     if (!this.flickerLights || !this.flickerLights.length) return;
     if (!this.accessibility?.flicker) {
-      for (const f of this.flickerLights) f.light.intensity = f.base;
+      for (const f of this.flickerLights) f.light.intensity = f.base * (blackout ? .58 : 1);
       return;
     }
     const t = now();
     for (const f of this.flickerLights) {
       let pulse = .96 + Math.sin(t * f.speed + f.phase) * .07 + Math.sin(t * 8.7 + f.phase) * .020;
-      if (this.currentMission?.type === 'blackout') pulse *= (.88 + Math.sin(t * 18 + f.phase) * .10 + (Math.sin(t * 31 + f.phase) > .86 ? -.22 : 0));
+      if (blackout) pulse *= (.58 + Math.sin(t * 18 + f.phase) * .10 + (Math.sin(t * 31 + f.phase) > .86 ? -.22 : 0));
       if (f.broken) {
         const harsh = Math.sin(t * 25 + f.phase) > .93 ? rand(.62, .82) : 1;
         pulse *= harsh;
@@ -6360,7 +4044,7 @@ class Game {
   drawStartMapPreview() {
     const c = UI.startMapPreview;
     if (!c || !c.getContext) return;
-    const previewKey = this.menuMode === 'story' ? this.getStoryChapter(this.storyChapterId)?.map : (SURVIVAL_MAP_KEYS.includes(UI.map?.value) ? UI.map.value : this.survivalMapKey);
+    const previewKey = (SURVIVAL_MAP_KEYS.includes(UI.map?.value) ? UI.map.value : this.survivalMapKey);
     const map = MAPS[previewKey] || MAPS.box;
     const ctx = c.getContext('2d');
     const rect = c.getBoundingClientRect();
@@ -6421,6 +4105,7 @@ class Game {
   }
 
   handleInput(dt) {
+    if(this.prepPhase && this.input.consumeAction('interact'))this.readyForNextLevel();
     const mouse = this.input.consumeMouse();
     this.adsTarget = this.input.actionDown('aim') ? 1 : 0;
     const lookMul = 1 - this.ads * .42;
@@ -6517,7 +4202,6 @@ class Game {
     p.staminaLocked = p.stamina <= 0;
   }
 
-
   findAssistTarget() {
     if (!this.remotePlayers || !this.remotePlayers.size || !this.player) return null;
     const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
@@ -6539,7 +4223,7 @@ class Game {
   }
 
   updateAssistInput(dt) {
-    if (this.updateStoryInteractionInput(dt)) return true;
+    
     const eDown = this.input.actionDown('heal');
     if (!eDown) {
       this.assistHold = 0; this.assistTargetId = null; this.assistSent = false; this.eSelfConsumed = false;
@@ -6955,7 +4639,6 @@ class Game {
     return tip;
   }
 
-
   lookDirection(yaw = this.yaw, pitch = this.pitch) {
     this.tmpEuler.set(Number(pitch) || 0, Number(yaw) || 0, 0, 'YXZ');
     return new THREE.Vector3(0, 0, -1).applyEuler(this.tmpEuler).normalize();
@@ -7236,26 +4919,15 @@ class Game {
   }
 
   updateSpawning(dt) {
-    if (!this.prepPhase && this.currentMission && this.updateMissionState(dt)) return;
-    if (this.spawnQueue > 0) {
-      this.spawnTimer -= dt;
-      if (this.spawnTimer <= 0 && this.enemies.filter(e => e.alive).length < (this.quality?.maxEnemies || 72)) {
-        if (this.spawnEnemy()) this.spawnQueue--;
-        const intervalScale = this.map?.spawnIntervalScale || 1;
-        this.spawnTimer = clamp((.72 - this.wave * .018) * intervalScale, .14, .7);
-      }
-    } else if (this.prepPhase) {
-      this.prepTimer -= dt;
-      if (this.prepTimer <= 0) this.nextWave();
-    } else if (!['survive','core','interact','generator','cargo','rescue','door','escort'].includes(this.currentMission?.type) && this.enemies.every(e => !e.alive)) {
-      this.waveBreak += dt;
-      if (this.waveBreak > 1.35) this.completeWave();
-    }
+    if(this.prepPhase){this.prepTimer=Math.max(0,this.prepTimer-dt);if(this.prepTimer<=0)this.nextWave();return;}
+    if(this.updateMissionState(dt))return;
+    const cap=Math.min(this.quality.maxEnemies || 40,this.currentMission?.maxActive || 40);
+    if(this.spawnQueue>0){this.spawnTimer-=dt;if(this.spawnTimer<=0 && this.enemies.filter(e=>e.alive).length<cap){if(this.spawnEnemy())this.spawnQueue--;this.spawnTimer=clamp((.86-this.wave*.02)*(this.map.spawnIntervalScale||1),.27,.85);}}
   }
 
   updateEnemies(dt) {
     const aiClock = now();
-    const storySurvivor = this.getActiveStorySurvivor();
+    
     for (const e of this.enemies) {
       if (!e.alive) continue;
       e.stun = Math.max(0, e.stun - dt);
@@ -7276,9 +4948,7 @@ class Game {
       const dxp = this.player.x - e.x, dzp = this.player.z - e.z;
       const d = Math.hypot(dxp, dzp) || 1;
       const nx = dxp / d, nz = dzp / d;
-      const survivorDxStart = storySurvivor ? storySurvivor.x - e.x : 0;
-      const survivorDzStart = storySurvivor ? storySurvivor.z - e.z : 0;
-      const survivorDistanceStart = storySurvivor ? Math.hypot(survivorDxStart, survivorDzStart) || .001 : Infinity;
+
       const prevX = e.x, prevZ = e.z;
 
       // 플레이어와 적 사이에 설치 벽이 있으면, 그 벽을 우선 목표로 잡는다.
@@ -7302,16 +4972,7 @@ class Game {
         if (!this.lineClear2D(e.x, e.z, target.x, target.z, routeRadius)) {
           target = this.getEnemyTacticalTarget(e, target.x, target.z, d);
         }
-        // 구조 중인 오세현이 가까우면 일부 적은 플레이어 대신 오세현에게 붙는다.
-        // 대상 바로 앞의 정지 지점까지만 계산해 NPC 자체 충돌체를 경로 장애물로 오인하지 않는다.
-        const aggroSurvivor = !playerWallBlocker && storySurvivor && e.type !== 'devil' && survivorDistanceStart < 10.5
-          && (survivorDistanceStart + .8 < d || (Number(e.id) || 0) % 3 === 0);
-        if (aggroSurvivor) {
-          const stop = e.radius + .56 + .20;
-          const sx = storySurvivor.x - survivorDxStart / survivorDistanceStart * stop;
-          const sz = storySurvivor.z - survivorDzStart / survivorDistanceStart * stop;
-          if (this.lineClear2D(e.x, e.z, sx, sz, routeRadius)) target = { x: sx, z: sz };
-        }
+
       }
       if (playerWallBlocker) {
         const near = this.closestPointOnObstacle(playerWallBlocker, e.x, e.z);
@@ -7367,22 +5028,12 @@ class Game {
 
       const zombieAttackRange = e.radius + this.player.radius + (e.type === 'runner' ? .82 : (e.type === 'tank' ? .92 : .74));
       const devilClawRange = e.radius + this.player.radius + .55;
-      const survivorDistance = storySurvivor ? Math.hypot(storySurvivor.x - e.x, storySurvivor.z - e.z) : Infinity;
-      const survivorAttackRange = e.radius + .56 + (e.type === 'runner' ? .82 : (e.type === 'tank' ? .94 : .76));
-      const hitSurvivor = !!storySurvivor && survivorDistance < survivorAttackRange && survivorDistance <= d + .65;
-      if (!playerWallBlocker && e.type === 'bomber' && e.meleeCd <= 0 && (d < e.radius + this.player.radius + 1.05 || hitSurvivor)) {
+
+      if (!playerWallBlocker && e.type === 'bomber' && e.meleeCd <= 0 && (d < e.radius + this.player.radius + 1.05 )) {
         this.detonateEnemy(e, 'self');
         continue;
       }
-      if (!playerWallBlocker && hitSurvivor && e.meleeCd <= 0 && e.type !== 'devil') {
-        e.meleeCd = e.type === 'runner' ? .78 : (e.type === 'tank' ? 1.18 : .98);
-        e.attackAnim = e.type === 'tank' ? .50 : .42;
-        e.attackMax = e.attackAnim;
-        e.stun = Math.max(e.stun || 0, .08);
-        e.mesh.rotation.y = Math.atan2(storySurvivor.x - e.x, storySurvivor.z - e.z);
-        this.damageStorySurvivor(e.damage * (e.type === 'runner' ? .34 : (e.type === 'tank' ? .56 : .42)), e, 'melee');
-        this.audio.enemyAttack(e.type);
-      } else if (!playerWallBlocker && d < zombieAttackRange && e.meleeCd <= 0 && e.type !== 'devil') {
+      if (!playerWallBlocker && d < zombieAttackRange && e.meleeCd <= 0 && e.type !== 'devil') {
         // 일정 거리 안으로 들어오면 닿기만 하는 게 아니라 팔을 뻗어 때린다.
         e.meleeCd = e.type === 'runner' ? .72 : (e.type === 'tank' ? 1.12 : .92);
         e.attackAnim = e.type === 'tank' ? .50 : .42;
@@ -7390,12 +5041,11 @@ class Game {
         e.stun = Math.max(e.stun || 0, .08);
         this.damagePlayer(e.damage * (e.type === 'runner' ? .46 : (e.type === 'tank' ? .72 : .60)), e, 'melee');
         this.audio.enemyAttack(e.type);
-      } else if (!playerWallBlocker && e.meleeCd <= 0 && e.type === 'devil' && (hitSurvivor || d < devilClawRange)) {
+      } else if (!playerWallBlocker && e.meleeCd <= 0 && e.type === 'devil' && (d < devilClawRange)) {
         e.meleeCd = 1.15;
         e.attackAnim = .40;
         e.attackMax = .40;
-        if (hitSurvivor) this.damageStorySurvivor(e.damage * .38, e, 'melee');
-        else this.damagePlayer(e.damage * .48, e, 'melee');
+        this.damagePlayer(e.damage * .48, e, 'melee');
         this.audio.enemyAttack(e.type);
       }
       e.walkSpeed = Math.hypot(e.x - prevX, e.z - prevZ) / Math.max(.001, dt);
@@ -7566,7 +5216,7 @@ class Game {
     let breakable = false;
     const candidates = this.nearbyObstacles(x, z, radius);
     for (const o of candidates) {
-      if (!o.alive || o.dynamicStory) continue;
+      if (!o.alive) continue;
       const cx = clamp(x, o.x - o.w / 2, o.x + o.w / 2);
       const cz = clamp(z, o.z - o.d / 2, o.z + o.d / 2);
       if (dist2(x, z, cx, cz) >= radius * radius) continue;
@@ -8370,13 +6020,7 @@ class Game {
         return { kind: 'player', x, z };
       }
       if (p.kind === 'fireball') {
-        const sv = this.getActiveStorySurvivor();
-        if (sv && dist2(x, z, sv.x, sv.z) < 1.0) {
-          p.x = x; p.z = z;
-          this.damageStorySurvivor(p.damage * .62, p, 'fireball');
-          this.detonateProjectile(p);
-          return { kind: 'survivor', x, z };
-        }
+
       }
       if (p.kind === 'rocket') {
         const enemy = this.enemies.find(e => e.alive && dist2(x, z, e.x, e.z) < (e.radius + .35) ** 2);
@@ -8400,6 +6044,7 @@ class Game {
   updatePlaceables(dt) {
     for (const b of this.placeables) {
       if (!b.alive) continue;
+      if (b.networked) { if (b.kind === 'barrel') b.mesh.rotation.y += dt * .08; continue; }
       if (b.kind === 'barrel') {
         b.mesh.rotation.y += dt * .08;
         const near = this.enemies.some(e => e.alive && dist2(e.x,e.z,b.x,b.z) < 2.1 * 2.1);
@@ -8446,11 +6091,7 @@ class Game {
     }
     const pd = Math.sqrt(dist2(x,z,this.player.x,this.player.z));
     if (pd <= radius * .85 && damage > 0) this.damagePlayer(damage * .34 * (1 - pd / radius), { x, z }, 'explosion');
-    const sv = this.getActiveStorySurvivor();
-    if (sv && damage > 0) {
-      const sd = Math.sqrt(dist2(x, z, sv.x, sv.z));
-      if (sd <= radius * .88) this.damageStorySurvivor(damage * .24 * Math.max(.12, 1 - sd / radius), { x, z }, 'explosion');
-    }
+
     for (const b of this.placeables) if (b.alive && b.kind === 'barrel' && dist2(x,z,b.x,b.z) < radius*radius) b.hp = 0;
   }
 
@@ -8829,7 +6470,7 @@ class Game {
       if (this.ads > .999) this.ads = 1;
     }
 
-    const targetFov = this.storyCinematicState?.cutawayActive ? 58 : (this.baseFov + (this.adsFov - this.baseFov) * this.ads);
+    const targetFov = this.baseFov + (this.adsFov - this.baseFov) * this.ads;
     if (Math.abs(this.camera.fov - targetFov) > .02) {
       this.camera.fov = targetFov;
       this.camera.updateProjectionMatrix();
@@ -8868,12 +6509,7 @@ class Game {
     this.tmpEuler.set(this.pitch + shakePitch, this.yaw + shakeYaw, 0, 'YXZ');
     this.camera.quaternion.setFromEuler(this.tmpEuler);
 
-    const cinematicCutaway = this.storyCinematicState?.cutawayActive && this.storyCinematicState?.cutawayPose;
-    if (cinematicCutaway) {
-      this.camera.position.copy(cinematicCutaway.position);
-      this.camera.quaternion.copy(cinematicCutaway.quaternion);
-    }
-    if (this.viewWeapon) this.viewWeapon.visible = !cinematicCutaway;
+    if (this.viewWeapon) this.viewWeapon.visible = true;
 
     if (this.viewWeapon) {
       const reloadPhase = this.reload?.active ? 1 - clamp(this.reload.timer / Math.max(.01, this.reload.duration), 0, 1) : 0;
@@ -8955,9 +6591,7 @@ class Game {
       UI.medkitText.textContent = `${Math.ceil(this.medkits || 0)}/${this.maxMedkits || 100}`;
       UI.medkitBar.style.width = `${clamp((this.medkits || 0) / (this.maxMedkits || 100) * 100, 0, 100)}%`;
     }
-    UI.waveText.textContent = this.runMode === 'story' && this.storyChapter
-      ? (this.prepPhase ? `CH ${this.storyChapter.id} · Prep ${Math.ceil(this.prepTimer)}s` : `CH ${this.storyChapter.id} · ${this.wave}/${this.storyChapter.waves}`)
-      : (this.prepPhase ? `Prep ${Math.ceil(this.prepTimer)}s` : `Wave ${this.wave}`);
+    UI.waveText.textContent = (this.prepPhase ? `Prep ${Math.ceil(this.prepTimer)}s` : `Wave ${this.wave}`);
     const alive = this.enemies.filter(e => e.alive).length + this.spawnQueue;
     UI.aliveText.textContent = this.currentMission?.type === 'survive' ? `${this.enemies.filter(e => e.alive).length} active` : `${alive} left`;
     if (UI.objectiveText) {
@@ -8966,6 +6600,7 @@ class Game {
       UI.objectiveText.classList.toggle('danger', !!obj && obj !== '정비 시간: 보상/아이템/벽 설치');
     }
     UI.scoreText.textContent = this.score.toLocaleString('ko-KR');
+    this.updateMissionHud();
     this.updateWeaponUI();
   }
 
@@ -8989,18 +6624,15 @@ class Game {
     }
   }
 
-
   completeWave() {
-    if (this.rewardOpen || this.prepPhase) return;
-    this.waveBreak = 0;
-    this.cleanupObjectiveCores(false);
-    this.score += Math.round(120 + this.wave * 35);
-    if (this.runMode === 'story' && this.storyChapter && this.wave >= this.storyChapter.waves) {
-      this.completeStoryChapter();
-      return;
-    }
-    this.dropSupply(true);
-    this.showRewardChoices();
+    if(this.rewardOpen || this.prepPhase)return;
+    this.waveBreak=0;this.cleanupObjectiveCores(false);this.cleanupMissionTargets();
+    const m=this.currentMission,bonus=this.missionState?.bonusComplete?m.bonusScore:0;
+    this.score+=m.completionScore+bonus;this.missionsCleared=(this.missionsCleared||0)+1;if(bonus)this.bonusesCleared=(this.bonusesCleared||0)+1;
+    this.hp=Math.min(this.maxHp,this.hp+8);this.medkits=Math.min(this.maxMedkits,this.medkits+8);
+    for(const w of WEAPON_DEFS)if(this.unlocked.has(w.id)&&Number.isFinite(w.ammoMax))this.ammo[w.id]=Math.min(w.ammoMax,this.ammo[w.id]+Math.ceil(w.ammoMax*.15));
+    this.dropSupply(true);this.showRewardChoices();
+    if(UI.rewardSubtitle)UI.rewardSubtitle.textContent='목표 보상 +'+m.completionScore+(bonus?' · 추가 목표 +'+bonus:' · 추가 목표 미달성')+' · 체력과 탄약을 보급했습니다.';
   }
 
   rewardPool() {
@@ -9031,7 +6663,7 @@ class Game {
     // 먼저 등장하지 않도록 로컬·서버 보상 후보 모두 같은 선행 조건을 사용한다.
     if (rewardId === 'wallHp' && !this.unlocked?.has('wall')) return false;
     if (rewardId === 'shotgunBreach' && !this.unlocked?.has('shotgun')) return false;
-    if (rewardId === 'railOvercharge' && !this.unlocked?.has('rail')) return false;
+    if (rewardId === 'railOvercharge' && !this.unlocked?.has('railgun')) return false;
     if (rewardId === 'rocketPayload' && !this.unlocked?.has('rocket')) return false;
     return true;
   }
@@ -9062,13 +6694,9 @@ class Game {
     this.mobile?.setGameplayActive(false);
     try { document.exitPointerLock?.(); } catch (_) {}
     const pool = this.pickRewardChoices(this.rewardPool(), 3);
-    if (UI.rewardTitle) UI.rewardTitle.textContent = this.runMode === 'story'
-      ? `Chapter ${this.storyChapter?.id || 1} · 단계 ${this.wave} 완료`
-      : `Wave ${this.wave} Clear`;
-    if (UI.rewardSubtitle) UI.rewardSubtitle.textContent = this.runMode === 'story'
-      ? '업그레이드를 하나 선택하면 다음 작전 단계 준비가 시작됩니다.'
-      : '업그레이드를 선택한 뒤 적용하세요. Wave 10부터 10웨이브마다 안전하게 탈출해 기록을 확정할 수 있습니다.';
-    const canExtract = this.rankedRun && this.wave >= 10 && this.wave % 10 === 0;
+    if (UI.rewardTitle) UI.rewardTitle.textContent = (`Wave ${this.wave} Clear`);
+    if (UI.rewardSubtitle) UI.rewardSubtitle.textContent = ('업그레이드를 선택한 뒤 적용하세요. Wave 10부터 10웨이브마다 안전하게 탈출해 기록을 확정할 수 있습니다.');
+    const canExtract = this.wave >= 10 && this.wave % 10 === 0;
     if (UI.rewardExtract) UI.rewardExtract.hidden = !canExtract;
     UI.reward?.classList.toggle('can-extract', canExtract);
     this.renderRewardChoices(pool);
@@ -9139,7 +6767,8 @@ class Game {
   chooseReward(reward) {
     if (!this.rewardOpen) return;
     if (this.usesServerEnemyAuthority() && this.serverRewardMode) {
-      if (reward?.id) this.net?.sendAction?.('chooseReward', 'pistol', { rewardId: reward.id });
+      this.net.sendAction('chooseReward','pistol',{rewardId:reward?.id || 'skip'});
+      this.serverRewardChosen=true;
       this.rewardOpen = false;
       this.resetRewardSelection();
       UI.reward?.classList.remove('show');
@@ -9159,9 +6788,15 @@ class Game {
     this.rewardOpen = false;
     this.resetRewardSelection();
     UI.reward?.classList.remove('show');
-    this.startPrepPhase(this.runMode === 'story' ? 8 : 10);
+    this.startPrepPhase(8);
     if (this.isTouchInputActive()) this.mobile?.setGameplayActive(true);
     else this.input.requestLock();
+  }
+
+  readyForNextLevel() {
+    if(!this.prepPhase)return;
+    if(this.lobby.mode==='coop'){if(!this.prepVoteSent && this.net.sendAction('skipPrep','pistol')){this.prepVoteSent=true;this.showToast('준비 완료. 친구가 준비하면 다음 레벨을 시작합니다.');}}
+    else this.nextWave();
   }
 
   startPrepPhase(seconds = 10) {
@@ -9169,9 +6804,7 @@ class Game {
     this.prepTimer = seconds;
     this.spawnQueue = 0;
     this.spawnTimer = 0;
-    this.showCenterAlert('정비 시간', this.runMode === 'story'
-      ? `${Math.ceil(seconds)}초 후 다음 작전 단계가 시작된다. 탄약과 방어선을 정비하라.`
-      : `${Math.ceil(seconds)}초 동안 아이템을 줍고 벽·지뢰를 준비해라.`, 'info', 2.4);
+    this.showCenterAlert('정비 시간', (`${Math.ceil(seconds)}초 동안 아이템을 줍고 벽·지뢰를 준비해라.`), 'info', 2.4);
   }
 
   loadCareer() {
@@ -9213,13 +6846,13 @@ class Game {
   }
 
   exportSaveData() {
-    const keys = ['bhfps_settings_v37','bhfps_input_settings_v44','bhfps_mobile_controls_v45','bhfps_best_stats_v24','bhfps_career_v47','bhfps_story_v52','bhfps_menu_mode_v52','bhfps_story_v51','bhfps_menu_mode_v51','bhfps_story_v50','bhfps_menu_mode_v50'];
+    const keys = ['bhfps_settings_v37','bhfps_input_settings_v44','bhfps_mobile_controls_v45','bhfps_best_stats_v24','bhfps_career_v47'];
     const data = {};
     for (const key of keys) {
       const value = localStorage.getItem(key);
       if (value !== null) data[key] = value;
     }
-    const payload = { format: 'boxhead-save', version: 52, createdAt: new Date().toISOString(), data };
+    const payload = { format: 'boxhead-save', version: 100, createdAt: new Date().toISOString(), data };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const href = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -9237,7 +6870,7 @@ class Game {
       if (file.size > 512 * 1024) throw new Error('저장 파일이 너무 큽니다.');
       const payload = JSON.parse(await file.text());
       if (payload?.format !== 'boxhead-save' || !payload.data || typeof payload.data !== 'object') throw new Error('BOXHEAD 저장 파일이 아닙니다.');
-      const allowed = new Set(['bhfps_settings_v37','bhfps_input_settings_v44','bhfps_mobile_controls_v45','bhfps_best_stats_v24','bhfps_career_v47','bhfps_story_v52','bhfps_menu_mode_v52','bhfps_story_v51','bhfps_menu_mode_v51','bhfps_story_v50','bhfps_menu_mode_v50']);
+      const allowed = new Set(['bhfps_settings_v37','bhfps_input_settings_v44','bhfps_mobile_controls_v45','bhfps_best_stats_v24','bhfps_career_v47']);
       let restored = 0;
       for (const [key, value] of Object.entries(payload.data)) {
         if (!allowed.has(key) || typeof value !== 'string') continue;
@@ -9253,13 +6886,11 @@ class Game {
     }
   }
 
-  completeRun(outcome = 'extracted') {
-    if (!this.running || this.runEnded) return;
-    if (outcome === 'extracted' && !(this.rankedRun && this.wave >= 10 && this.wave % 10 === 0)) return;
-    this.rewardOpen = false;
-    this.resetRewardSelection();
-    UI.reward?.classList.remove('show');
-    this.endGame(outcome);
+  completeRun(outcome='extracted') {
+    if(!this.running || this.runEnded)return;
+    if(outcome==='extracted' && !(this.wave>=10 && this.wave%10===0))return;
+    if(this.lobby.mode==='coop'){this.net.sendAction('extract','pistol');this.serverExtractRequested=true;if(UI.rewardExtract)UI.rewardExtract.textContent='친구의 탈출 동의 대기';this.showToast('탈출 동의 전송. 친구도 탈출하기를 눌러야 합니다.');return;}
+    this.rewardOpen=false;this.resetRewardSelection();UI.reward?.classList.remove('show');this.endGame(outcome);
   }
 
   loadBestStats() {
@@ -9268,8 +6899,8 @@ class Game {
   }
 
   saveBestStats() {
-    const key = `${this.mapKey || 'map'}_${UI.diff?.value || 'normal'}`;
-    const prev = this.bestStats?.[key] || { wave: 0, score: 0, kills: 0, headshots: 0 };
+    const key = `${this.lobby.mode}_${this.mapKey || 'map'}_${UI.diff?.value || 'normal'}`;
+    const prev = this.bestStats?.[key] || (this.lobby.mode==='single'?this.bestStats?.[`${this.mapKey}_${UI.diff?.value || 'normal'}`]:null) || { wave: 0, score: 0, kills: 0, headshots: 0 };
     const current = { wave: this.wave, score: this.score, kills: this.kills || 0, headshots: this.headshots || 0, map: this.map?.label || '', diff: UI.diff?.value || 'normal' };
     const best = {
       wave: Math.max(prev.wave || 0, current.wave),
@@ -9287,7 +6918,7 @@ class Game {
   }
 
   runRank() {
-    if (this.runMode === 'story') return `Chapter ${this.storyChapter?.id || 1} · 작전 실패`;
+    
     if (!this.rankedRun) return '연습 / 기록 제외';
     const w = this.wave || 0;
     const s = this.score || 0;
@@ -9305,30 +6936,103 @@ class Game {
     const record = this.saveBestStats();
     this.recordCareer(outcome);
     this.gameOver = true;
-    this.running = false;
+    this.running = false;this.paused=false;UI.pause?.classList.remove('show');UI.reward?.classList.remove('show');UI.connectionOverlay?.classList.remove('show');this.connectionBlocked=false;
+    if(UI.restartBtn)UI.restartBtn.textContent=this.lobby.mode==='coop'?'로비로 돌아가기':'다시 시작';
     this.mobile?.setGameplayActive(false);
-    document.getElementById('story-survivor-health')?.classList.remove('show', 'hurt');
+    
     document.exitPointerLock?.();
     UI.hud.classList.add('hidden');
     UI.over.classList.add('show');
     const overTitle = UI.over?.querySelector('h2');
     const overEyebrow = UI.over?.querySelector('.eyebrow');
-    if (overTitle) overTitle.textContent = this.runMode === 'story' ? (outcome === 'survivor-lost' ? '구조 대상 사망' : '작전 실패') : (outcome === 'extracted' ? '런 탈출 성공' : '게임 오버');
-    if (overEyebrow) overEyebrow.textContent = this.runMode === 'story' ? 'MISSION FAILED' : (outcome === 'extracted' ? 'RUN EXTRACTED' : 'RUN ENDED');
-    const survived = this.runStartTime ? Math.max(0, now() - this.runStartTime) : 0;
+    if (overTitle) overTitle.textContent = (outcome === 'extracted' ? '런 탈출 성공' : '게임 오버');
+    if (overEyebrow) overEyebrow.textContent = (outcome === 'extracted' ? 'RUN EXTRACTED' : 'RUN ENDED');
+    const survived = this.lobby.mode==='coop'?this.networkElapsed || 0:(this.runStartTime ? Math.max(0, now() - this.runStartTime) : 0);
     const min = Math.floor(survived / 60), sec = Math.floor(survived % 60);
     UI.finalStats.innerHTML = `
-      <div><b>${this.runRank()}</b><span>${this.runMode === 'story' ? '현재 작전' : '런 랭크'}</span></div>
-      <div><b>${this.wave}${this.runMode === 'story' ? `/${this.storyChapter?.waves || this.wave}` : ''}</b><span>${this.runMode === 'story' ? '완료한 작전 단계' : `도달 웨이브${this.rankedRun ? ` / 최고 ${record.best.wave}` : ' / 기록 제외'}`}</span></div>
+      <div><b>${this.runRank()}</b><span>${('런 랭크')}</span></div>
+      <div><b>${this.wave}${('')}</b><span>${(`도달 웨이브${this.rankedRun ? ` / 최고 ${record.best.wave}` : ' / 기록 제외'}`)}</span></div>
       <div><b>${this.score.toLocaleString('ko-KR')}</b><span>점수${this.rankedRun ? ` / 최고 ${record.best.score.toLocaleString('ko-KR')}` : ' / 기록 제외'}</span></div>
       <div><b>${this.kills}</b><span>처치${this.rankedRun ? ` / 최고 ${record.best.kills}` : ' / 기록 제외'}</span></div>
       <div><b>${this.headshots || 0}</b><span>헤드샷${this.rankedRun ? ` / 최고 ${record.best.headshots || 0}` : ' / 기록 제외'}</span></div>
       <div><b>${min}:${String(sec).padStart(2,'0')}</b><span>생존 시간</span></div>
-      <div><b>${this.rewardsTaken || 0}</b><span>선택한 보상</span></div>
+      <div><b>${this.missionsCleared || 0}</b><span>완료한 목표</span></div>
       <div><b>${this.map.label}</b><span>맵</span></div>
       <div><b>${UI.diff.value.toUpperCase()}</b><span>난이도</span></div>
     `;
   }
+
+  resetLobby() { this.lobby={mode:'single',role:'solo',roomCode:'',ready:false,remoteReady:false,remoteSeen:false};this.setPlayMode('single'); }
+  async copyInvite() {
+    const url=new URL(location.protocol==='file:' && this.net.serverUrl?this.net.serverUrl:location.href);url.searchParams.set('room',this.lobby.roomCode);
+    if(['localhost','127.0.0.1','[::1]'].includes(url.hostname)){this.showToast('다른 기기 초대: PC의 LAN IP 또는 공개 서버 주소로 접속한 뒤 링크를 복사하세요.');return;}
+    try{await navigator.clipboard.writeText(url.href);this.showToast('초대 링크 복사 완료');}
+    catch{if(UI.roomCodeInput){UI.roomCodeInput.value=this.lobby.roomCode;UI.roomCodeInput.focus();UI.roomCodeInput.select();}this.showToast('방 코드 '+this.lobby.roomCode+'를 친구에게 알려주세요.');}
+  }
+  setConnectionBlocked(blocked,title='',copy='') {
+    const wasBlocked=this.connectionBlocked;this.connectionBlocked=!!blocked;
+    UI.connectionOverlay?.classList.toggle('show',!!blocked);
+    if(UI.connectionTitle)UI.connectionTitle.textContent=title || '친구의 연결을 기다립니다';if(UI.connectionCopy)UI.connectionCopy.textContent=copy || '최대 2분 동안 현재 진행을 보관합니다.';
+    if(blocked){this.input.resetTransient();this.net.sendInput(true);this.mobile?.setGameplayActive(false);try{document.exitPointerLock?.();}catch{}}
+    else if(wasBlocked && this.running && !this.paused && !this.rewardOpen){if(this.isTouchInputActive())this.mobile?.setGameplayActive(true);else{this.paused=true;UI.pause?.classList.add('show');this.showToast('연결 복구 완료. 계속하기를 눌러주세요.');}}
+  }
+  disposeWorld() {
+    if(!this.scene)return;const geometries=new Set(),materials=new Set();
+    this.scene.traverse(o=>{if(o.geometry)geometries.add(o.geometry);if(o.material)for(const m of [].concat(o.material))materials.add(m);});
+    for(const g of geometries)g.dispose();for(const m of materials)m.dispose();
+    for(const light of this.flickerLights || [])light.light?.shadow?.map?.dispose?.();
+  }
+  renderLevelGuide() {
+    if(!UI.levelGuide)return;const start=Math.max(1,Number(UI.startWave?.value || 1));
+    UI.levelGuide.innerHTML=Array.from({length:10},(_,i)=>{const level=Math.floor((start-1)/10)*10+i+1,m=getMission(level);return '<div class="level-tile'+(start===level?' selected':'')+'"><small>LEVEL '+String(level).padStart(2,'0')+'</small><b>'+m.icon+' '+m.label+'</b><span>'+m.desc+'</span></div>';}).join('');
+  }
+  findMissionPoint(points=[],radius=1.2) {
+    for(let attempt=0;attempt<90;attempt++){
+      const half=Math.min(this.map.size/2-6,30);const x=rand(-half,half),z=rand(-half,half);
+      if(this.collides(x,z,radius)||dist2(x,z,this.player.x,this.player.z)<36||points.some(p=>dist2(x,z,p.x,p.z)<81)||!this.hasNavRouteToPlayer(x,z,.65))continue;
+      return {x,z};
+    }
+    return this.findDeterministicSafePoint(Math.min(radius,1.2),{originX:this.player.x,originZ:this.player.z+8,minPlayerDistance:4,minCoreDistance:5,requireRoute:true});
+  }
+  cleanupMissionTargets() {if(this.missionTargetGroup?.parent)this.missionTargetGroup.parent.remove(this.missionTargetGroup);this.missionTargetGroup=null;this.missionTargetKey='';}
+  syncMissionTargets() {
+    const m=this.currentMission,s=this.missionState;if(!m || !s)return;
+    const key=m.wave+':'+s.targets.map(t=>t.id+':'+t.done).join('|');if(key===this.missionTargetKey)return;
+    this.cleanupMissionTargets();this.missionTargetKey=key;const group=new THREE.Group();this.missionTargetGroup=group;this.scene.add(group);
+    for(const t of s.targets){const color=t.done?0x466463:0x62efd6,r=m.type==='holdout'?t.radius:1.3;
+      const ring=new THREE.Mesh(new THREE.RingGeometry(r-.12,r,32),new THREE.MeshBasicMaterial({color,side:THREE.DoubleSide}));ring.rotation.x=-Math.PI/2;ring.position.set(t.x,.05,t.z);group.add(ring);
+      const pole=new THREE.Mesh(this.geos.lowBox,new THREE.MeshBasicMaterial({color}));pole.position.set(t.x,1.3,t.z);pole.scale.set(.12,2.6,.12);group.add(pole);
+      const top=new THREE.Mesh(this.geos.pickup,new THREE.MeshBasicMaterial({color}));top.position.set(t.x,2.8,t.z);group.add(top);
+    }
+  }
+  updateObjectiveMarker() {
+    if(!UI.missionMarker)return;const m=this.currentMission,s=this.missionState;
+    const targets=(m && !s?.complete) && m.type==='core'?(this.objectiveCores || []).filter(t=>t.alive):(s?.targets || []).filter(t=>!t.done);
+    const t=targets.sort((a,b)=>dist2(a.x,a.z,this.player.x,this.player.z)-dist2(b.x,b.z,this.player.x,this.player.z))[0];
+    if(!t || s?.complete || this.prepPhase || this.rewardOpen){UI.missionMarker.classList.remove('show');return;}
+    this.camera.updateMatrixWorld();const p=this.tmpV.set(t.x,1.5,t.z).project(this.camera);const front=p.z<1;
+    const x=front?clamp((p.x*.5+.5)*innerWidth,100,innerWidth-100):(Math.cos(this.yaw)*(t.x-this.player.x)-Math.sin(this.yaw)*(t.z-this.player.z)>0?innerWidth-100:100);
+    const y=front?clamp((-p.y*.5+.5)*innerHeight,110,innerHeight-145):innerHeight*.45;
+    UI.missionMarker.style.left=x+'px';UI.missionMarker.style.top=y+'px';UI.missionMarker.classList.add('show');
+    UI.missionMarkerLabel.textContent=(m.type==='core'?'◆ 코어':m.type==='holdout'?'⊙ 거점':'⚡ 중계기')+' · '+Math.round(Math.hypot(t.x-this.player.x,t.z-this.player.z))+'m';
+    this.syncMissionTargets();
+  }
+  updateMissionHud() {
+    const m=this.currentMission,s=this.missionState;if(!m||!s)return;
+    if(UI.missionTitle)UI.missionTitle.textContent='L'+this.wave+' · '+m.label;
+    if(UI.missionBar)UI.missionBar.style.width=Math.round(missionProgress(m,s,{remaining:this.spawnQueue+this.enemies.filter(e=>e.alive).length,initialCount:this.initialWaveCount})*100)+'%';
+    if(UI.missionBonus)UI.missionBonus.textContent=m.bonus==='headshots'?'추가 목표: 헤드샷 '+Math.min(m.bonusTarget,(this.headshots || 0)-s.startHeadshots)+'/'+m.bonusTarget+' · +'+m.bonusScore:'추가 목표: '+m.bonusTarget+'초 안에 완료 · +'+m.bonusScore;
+    if(UI.prepReady){UI.prepReady.hidden=!this.prepPhase;UI.prepReady.disabled=this.lobby.mode==='coop' && !!this.prepVoteSent;const key=this.isTouchInputActive()?'':'F · ';UI.prepReady.textContent=this.lobby.mode==='coop'?(this.prepVoteSent?'준비 완료 · '+this.prepReadyCount+'/2':key+'다음 레벨 준비 완료'):key+'다음 레벨 바로 시작';}
+    if(UI.squadStatus){const ally=[...this.remotePlayers.values()][0];UI.squadStatus.hidden=this.lobby.mode!=='coop';UI.squadStatus.textContent=ally?('친구 '+(ally.downed?'쓰러짐 · E 길게 눌러 부활':'HP '+Math.ceil(ally.hp || 0))):'친구 상태 동기화 중';}
+  }
+  syncServerCores(list=[]) {
+    const seen=new Set();for(const sc of list){const id=String(sc.id);seen.add(id);let c=this.objectiveCores.find(x=>x.serverId===id);
+      if(!c){c=this.createObjectiveCore(sc.x,sc.z,this.objectiveCores.length);c.serverId=id;this.objectiveCores.push(c);}c.hp=sc.hp;c.maxHp=sc.maxHp;c.alive=sc.alive;
+      if(!c.alive && c.mesh?.parent)this.scene.remove(c.mesh);
+    }
+    for(const c of this.objectiveCores)if(!seen.has(c.serverId)){c.alive=false;if(c.mesh?.parent)this.scene.remove(c.mesh);}this.objectiveCores=this.objectiveCores.filter(c=>seen.has(c.serverId));
+  }
+
 }
 
 window.__game = new Game();

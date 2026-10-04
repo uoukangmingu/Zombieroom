@@ -6,12 +6,12 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="screen-orientation" content="landscape" />
-  <title>BOXHEAD: BACKROOM LOW</title>
-  <meta name="description" content="오프라인 1인용 저폴리 웨이브 생존 FPS" />
+  <title>BOXHEAD · BACKROOM CO-OP</title>
+  <meta name="description" content="싱글플레이와 2인 온라인 협동 생존 FPS" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="assets/boxhead-icon-64.png" sizes="64x64" type="image/png" />
   <link rel="apple-touch-icon" href="assets/boxhead-icon-256.png" />
-  <link rel="stylesheet" href="style.css?v=62.0" />
+  <link rel="stylesheet" href="style.css?v=1.0.0" />
 </head>
 <body>
   <div id="game-root">
@@ -25,7 +25,7 @@
         <h1>BOXHEAD</h1>
         <span id="loading-status">격리 구역을 확인하는 중...</span>
         <div class="loading-track"><i id="loading-bar"></i></div>
-        <small>BACKROOM LOW · v62.0</small>
+        <small>BACKROOM LOW · v1.0.0</small>
       </div>
     </section>
 
@@ -34,36 +34,32 @@
         <div class="brand-mark"><img src="assets/boxhead-icon-256.png" alt="" /></div>
         <div>
           <p class="eyebrow">LOW-POLY SURVIVAL FPS</p>
-          <h1>BOXHEAD: BACKROOM LOW</h1>
+          <h1>BOXHEAD<span class="brand-subtitle">BACKROOM CO-OP</span></h1>
         </div>
       </div>
 
-      <p class="lead">
-        Boxhead식 웨이브 생존, 무기 해금, 벽·지뢰 설치를
-        백룸풍 공간에서 혼자 살아남는 1인칭 저폴리 FPS. 인터넷 연결과 서버 설정 없이 바로 플레이할 수 있다.
-      </p>
-
-      <div class="game-mode-tabs" role="tablist" aria-label="게임 모드 선택">
-        <button id="survival-mode-button" class="mode-button active" type="button" role="tab" aria-selected="true">
-          <b>생존 모드</b><span>끝없이 이어지는 웨이브 런</span>
-        </button>
-        <button id="story-mode-button" class="mode-button" type="button" role="tab" aria-selected="false">
-          <b>스토리 모드</b><span>5개 챕터 격리 작전</span>
-        </button>
+      <p class="lead">살아남고, 목표를 달성하고, 다음 구역으로.<br>혼자 도전하거나 친구와 함께 10가지 레벨 작전을 돌파하세요.</p>
+      <div class="menu-badges"><span>5개 전장</span><span>8종 무기</span><span>레벨별 목표</span><span>2인 온라인 협동</span></div>
+      <div class="game-mode-tabs" role="tablist" aria-label="플레이 인원 선택">
+        <button id="single-mode-button" class="mode-button active" type="button" role="tab" aria-selected="true"><b>01 · 싱글플레이</b><span>혼자 도전하는 생존 런</span></button>
+        <button id="coop-mode-button" class="mode-button" type="button" role="tab" aria-selected="false"><b>02 · 온라인 협동</b><span>친구와 같은 전장에서</span></button>
       </div>
-
+      <input id="play-mode-select" type="hidden" value="single" />
+      <div id="multiplayer-panel" class="multiplayer-panel hidden">
+        <div class="network-heading"><span id="net-state" class="net-state">연결 대기</span><span id="net-status-text">같은 서버 주소로 접속한 뒤 친구를 초대하세요.</span></div>
+        <div class="lobby-actions">
+          <button id="create-room-button" class="settings-button accent" type="button">방 만들기</button>
+          <label class="room-input-label"><span class="sr-only">6자리 방 코드</span><input id="room-code-input" placeholder="6자리 방 코드" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="6자리 방 코드" /></label>
+          <button id="join-room-button" class="settings-button" type="button">입장</button>
+          <button id="ready-button" class="settings-button accent" type="button" disabled>준비하기</button>
+        </div>
+        <div class="room-strip"><span>ROOM <b id="lobby-room-code">— — — — — —</b></span><button id="copy-invite-button" type="button" class="settings-button" disabled>초대 링크 복사</button><button id="leave-room-button" type="button" class="settings-button" disabled>방 나가기</button></div>
+        <div id="lobby-players" class="lobby-players"></div><p id="lobby-status-text" class="lobby-status" role="status">방을 만든 뒤 친구에게 코드를 알려주세요.</p>
+      </div>
       <div id="survival-menu-panel">
         <div id="career-summary" class="career-summary" aria-live="polite">생존 기록을 불러오는 중...</div>
-        <button id="start-button" class="primary quick-start">빠른 시작</button>
+        <button id="start-button" class="primary quick-start" type="button">싱글플레이 시작</button>
       </div>
-
-      <div id="story-menu-panel" class="story-menu-panel hidden">
-        <div id="story-progress-summary" class="story-progress-summary" aria-live="polite">스토리 진행 상황을 불러오는 중...</div>
-        <div id="story-chapter-list" class="story-chapter-list" aria-label="스토리 챕터 선택"></div>
-        <div id="story-selected-summary" class="story-selected-summary"></div>
-        <button id="story-start-button" class="primary quick-start" type="button">선택한 챕터 브리핑</button>
-      </div>
-
       <details class="start-options">
         <summary>맵·난이도·그래픽 상세 설정</summary>
 
@@ -87,15 +83,21 @@
           </select>
         </label>
         <label>
-          시작 웨이브 / 연습
+          시작 레벨 / 연습
           <select id="start-wave-select">
-            <option value="1" selected>Wave 1 / 기본</option>
-            <option value="3">Wave 3 / 연습·기록 제외</option>
-            <option value="5">Wave 5 / 연습·기록 제외</option>
-            <option value="7">Wave 7 / 연습·기록 제외</option>
-            <option value="9">Wave 9 / 연습·기록 제외</option>
-            <option value="12">Wave 12 / 테스트·기록 제외</option>
-            <option value="15">Wave 15 / 테스트·기록 제외</option>
+            <option value="1" selected>Level 1 / 기본</option>
+            <option value="2">Level 2 / 연습·기록 제외</option>
+            <option value="3">Level 3 / 연습·기록 제외</option>
+            <option value="4">Level 4 / 연습·기록 제외</option>
+            <option value="5">Level 5 / 연습·기록 제외</option>
+            <option value="6">Level 6 / 연습·기록 제외</option>
+            <option value="7">Level 7 / 연습·기록 제외</option>
+            <option value="8">Level 8 / 연습·기록 제외</option>
+            <option value="9">Level 9 / 연습·기록 제외</option>
+            <option value="10">Level 10 / 연습·기록 제외</option>
+            <option value="15">Level 15 / 연습·기록 제외</option>
+            <option value="20">Level 20 / 연습·기록 제외</option>
+            <option value="30">Level 30 / 연습·기록 제외</option>
           </select>
         </label>
         <label>
@@ -151,15 +153,16 @@
         <input id="save-import-file" type="file" accept="application/json,.json" hidden />
       </div>
 
+      <details class="mission-guide"><summary>레벨별 목표 보기</summary><div id="level-guide" class="level-guide"></div><p>10레벨마다 탈출 기회가 열립니다. 다음 구역은 목표량과 적 구성이 강화됩니다. 추가 목표는 점수 보너스이며 실패해도 진행할 수 있습니다.</p></details>
       <div class="help-card">
         <b>조작</b>
-        <span>WASD 이동 · Space 점프 · 마우스 시점 · 좌클릭 발사 · 우클릭 정조준 · 마우스 휠/1~8 무기 · R 재장전 · E 회복키트 · Shift 달리기 · ESC 설정/일시정지</span>
+        <span>WASD 이동 · Space 점프 · 마우스 시점 · 좌클릭 발사 · 우클릭 정조준 · 마우스 휠/1~8 무기 · R 재장전 · E 회복키트 · Shift 달리기 · F 목표 상호작용 · ESC 설정</span>
       </div>
     </section>
 
     <section id="pause-screen" class="panel">
       <h2>설정 / 일시정지</h2>
-      <p>ESC로 열고 닫을 수 있다. 설정 변경 후 계속하기를 누르면 마우스가 다시 잠긴다.</p>
+      <p>ESC로 열고 닫을 수 있다. 설정 변경 후 계속하기를 누르면 마우스가 다시 잠깁니다. 온라인 협동에서는 설정을 여는 동안 친구의 게임이 계속됩니다.</p>
       <div class="pause-settings">
         <label>
           그래픽 품질
@@ -231,18 +234,6 @@
       </div>
     </section>
 
-    <section id="story-screen" class="panel story-screen">
-      <p id="story-screen-eyebrow" class="eyebrow">STORY BRIEFING</p>
-      <h2 id="story-screen-title">격리 작전</h2>
-      <p id="story-screen-copy" class="story-screen-copy"></p>
-      <div id="story-screen-objectives" class="story-screen-objectives"></div>
-      <div id="story-screen-status" class="story-screen-status"></div>
-      <div class="story-screen-actions">
-        <button id="story-primary-button" class="settings-button accent" type="button">임무 시작</button>
-        <button id="story-secondary-button" class="settings-button" type="button">챕터 선택으로</button>
-      </div>
-    </section>
-
     <section id="game-over-screen" class="panel">
       <p class="eyebrow">RUN ENDED</p>
       <h2>게임 오버</h2>
@@ -282,16 +273,19 @@
       </div>
 
       <div class="top-center">
-        <div class="wave-box">
+        <div class="wave-box" id="mission-card">
+          <div id="mission-title" class="mission-title">LEVEL 1 · 구역 확보</div>
           <b id="wave-text">Wave 1</b>
           <span id="alive-text">0 left</span>
           <span id="objective-text" class="objective-text"></span>
+          <div class="mission-track"><i id="mission-progress-bar"></i></div><small id="mission-bonus" class="mission-bonus"></small>
+          <button id="prep-ready" class="settings-button" type="button" hidden>다음 레벨 바로 시작</button>
         </div>
       </div>
 
       <div class="top-right">
         <div id="score-text" class="score">0</div>
-        <div id="fps-text" class="fps">FPS --</div>
+        <div id="fps-text" class="fps">FPS --</div><div id="ping-text" class="fps">PING —</div>
         <div id="quality-text" class="fps quality-state">AUTO</div>
       </div>
 
@@ -309,17 +303,8 @@
         <div id="ammo-text" class="ammo">PISTOL ∞</div>
       </div>
 
-      <div id="story-target-marker" class="story-target-marker" aria-hidden="true">
-        <em id="story-target-direction"></em><i id="story-target-icon">◆</i><b id="story-target-label">목표</b><span id="story-target-distance">0m</span>
-      </div>
-      <div id="story-dialogue" class="story-dialogue" aria-live="polite" aria-atomic="true">
-        <div class="story-dialogue-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-        <div class="story-dialogue-copy"><b id="story-dialogue-speaker">격리국 관제</b><p id="story-dialogue-text"></p></div>
-      </div>
-      <div id="story-cinematic" class="story-cinematic" aria-hidden="true">
-        <i class="story-cinematic-top"></i><i class="story-cinematic-bottom"></i>
-        <div><b id="story-cinematic-title"></b><span id="story-cinematic-copy"></span></div>
-      </div>
+      <div id="objective-marker" class="objective-marker"><b id="objective-marker-label">목표</b></div>
+      <div id="squad-status" class="squad-status" hidden></div>
       <div id="toast" class="toast"></div>
       <div id="damage-vignette" class="damage-vignette"></div>
     </div>
@@ -336,6 +321,7 @@
       <button class="mobile-control mobile-action action-jump" data-control="jump" type="button">점프</button>
       <button class="mobile-control mobile-action action-sprint" data-control="sprint" type="button">달리기</button>
       <button class="mobile-control mobile-action action-reload" data-control="reload" type="button">재장전</button>
+      <button class="mobile-control mobile-action action-interact" data-control="interact" type="button">목표</button>
       <button class="mobile-control mobile-action action-heal" data-control="heal" type="button">회복</button>
       <button class="mobile-control mobile-action action-weapon" data-control="weapon" type="button">무기</button>
       <button class="mobile-control mobile-action action-pause" data-control="pause" type="button">Ⅱ</button>
@@ -429,19 +415,15 @@
       <span>게임은 모바일 가로 화면에 맞춰 실행됩니다.</span>
     </div>
 
+    <div id="connection-overlay" class="connection-overlay" role="status"><div><span class="reconnect-spinner"></span><h2 id="connection-title">연결 복구 중</h2><p id="connection-copy">현재 진행을 보관하고 있습니다.</p><button id="connection-leave" type="button" class="settings-button">메인으로 돌아가기</button></div></div>
     <noscript>이 게임은 JavaScript가 필요합니다.</noscript>
   </div>
 
   <script defer src="config.js"></script>
-  <script defer src="/socket.io/socket.io.js"></script>
-  <script defer src="game.bundle.js?v=62.0"></script>
-  <script defer src="v59.patch.js?v=62.0"></script>
-  <script defer src="v60.patch.js?v=62.0"></script>
-  <script defer src="v61.patch.js?v=62.0"></script>
-  <script defer src="v62.patch.js?v=62.0"></script>
+  <script defer src="game.bundle.js?v=1.0.0"></script>
   <script>
     (() => {
-      const BUILD = '62.0';
+      const BUILD = '1.0.0';
       window.BOXHEAD_BUILD = BUILD;
       if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
       const reloadKey = `boxhead-controller-reload-${BUILD}`;

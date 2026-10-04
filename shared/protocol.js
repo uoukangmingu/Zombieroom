@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export const CLIENT_TO_SERVER = {
   CREATE_ROOM: 'createRoom',
@@ -27,10 +27,11 @@ export function sanitizeRoomCode(code = '') {
 }
 
 export function sanitizeSettings(settings = {}) {
-  const maps = new Set(['box', 'lane', 'castle', 'maze']);
+  const maps = new Set(['box', 'lane', 'castle', 'maze', 'abyss']);
   const diffs = new Set(['normal', 'hard', 'hell']);
-  const qualities = new Set(['low', 'mid', 'high']);
-  const wave = Math.max(1, Math.min(30, Number(settings.startWave || 1) || 1));
+  const qualities = new Set(['auto', 'ultra', 'low', 'mid', 'high']);
+  settings = settings && typeof settings === 'object' ? settings : {};
+  const wave = Math.max(1, Math.min(30, Math.floor(Number(settings.startWave || 1) || 1)));
   return {
     map: maps.has(settings.map) ? settings.map : 'box',
     diff: diffs.has(settings.diff) ? settings.diff : 'normal',

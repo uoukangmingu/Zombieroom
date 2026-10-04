@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {MAPS} from '../shared/arena.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,9 +155,7 @@ function assertClearPath(harness, start, points, radius) {
 
 // 가장 복잡한 Abyss Citadel의 16개 스폰이 중앙 플레이어까지 모두 연결되는지 검사한다.
 {
-  const builderSource = extractTopLevelFunction('buildAbyssCitadelObstacles');
-  const buildAbyss = Function(`${builderSource}; return buildAbyssCitadelObstacles;`)();
-  const obstacles = buildAbyss().map(([x, z, w, d]) => ({ x, z, w, d }));
+  const obstacles = MAPS.abyss.obstacles.map(([x, z, w, d]) => ({ x, z, w, d }));
   const spawns = [
     [-61,-61], [61,-61], [-61,61], [61,61], [0,-61], [0,61], [-61,0], [61,0],
     [-36,-61], [36,-61], [-36,61], [36,61], [-61,-36], [-61,36], [61,-36], [61,36]

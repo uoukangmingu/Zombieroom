@@ -1,14 +1,10 @@
-const BUILD = '62.0';
+const BUILD = '1.0.0';
 const CACHE_NAME = `boxhead-backroom-low-v${BUILD}-network-first`;
 const CORE_ASSETS = [
   `./index.html?build=${BUILD}`,
   './config.js',
   `./style.css?v=${BUILD}`,
   `./game.bundle.js?v=${BUILD}`,
-  `./v59.patch.js?v=${BUILD}`,
-  `./v60.patch.js?v=${BUILD}`,
-  `./v61.patch.js?v=${BUILD}`,
-  `./v62.patch.js?v=${BUILD}`, 
   './version.json',
   './manifest.webmanifest',
   './assets/boxhead-icon-64.png',
@@ -60,7 +56,7 @@ function eventWaitlessPut(cache, request, response) {
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
+  if (url.origin !== self.location.origin || /\/socket\.io\//.test(url.pathname) || /\/(health|api\/)/.test(url.pathname)) return;
   const mutable = event.request.mode === 'navigate' || ['document','script','style','manifest'].includes(event.request.destination) || /(?:version\.json|config\.js|sw\.js)$/.test(url.pathname);
   if (mutable) {
     event.respondWith(networkFirst(event.request));
