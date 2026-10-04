@@ -1102,3 +1102,19 @@ button:disabled { opacity:.38; cursor:default; filter:none; box-shadow:none; }
   #mission-card { width:240px;padding:7px 10px;gap:2px 8px; }.mission-title,#mission-card #objective-text { font-size:9px; }.mission-bonus { font-size:7px; }.top-center { top:7px; }
   .squad-status { top:135px;font-size:8px;padding:5px 7px; }.center-alert { top:37%;padding:9px 12px; }
 }
+:root { --sound-accent: #86dfcf; }
+.panel.sound-panel { width: min(680px, calc(100vw - 28px)); }
+.sound-panel.show { z-index: 180; }
+.sound-panel h2 { margin-bottom: 8px; }
+.sound-sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 22px 0; }
+.sound-sliders label { display: block; padding: 15px; background: #ffffff06; border: 1px solid #ffffff18; border-radius: 10px; font-weight: 700; }
+.sound-sliders b { float: right; color: var(--sound-accent); }
+.sound-sliders input { display: block; width: 100%; margin: 14px 0 6px; accent-color: var(--sound-accent); cursor: pointer; }
+.sound-sliders small { color: #a1b6b1; font-size: 12px; font-weight: 400; }
+.sound-mix-label { display: grid; gap: 8px; font-weight: 700; }
+.sound-mix-label select { width: 100%; }
+.sound-status { padding: 12px 14px; border-left: 3px solid var(--sound-accent); background: #86dfcf08; font-size: 13px; min-height: 40px; }
+.sound-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.sound-panel .sound-hint { margin-bottom: 0; font-size: 12px; color: #a1b6b1; }
+@media (max-width: 520px) { .sound-sliders { grid-template-columns: 1fr; } .sound-actions { grid-template-columns: 1fr; } }
+@media (max-height: 500px) { .sound-sliders { margin: 12px 0; gap: 8px; } .sound-sliders label { padding: 10px; } .sound-panel h2 { font-size: 28px; } }

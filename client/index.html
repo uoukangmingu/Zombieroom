@@ -11,7 +11,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="assets/boxhead-icon-64.png" sizes="64x64" type="image/png" />
   <link rel="apple-touch-icon" href="assets/boxhead-icon-256.png" />
-  <link rel="stylesheet" href="style.css?v=1.0.0" />
+  <link rel="stylesheet" href="style.css?v=1.1.0" />
 </head>
 <body>
   <div id="game-root">
@@ -25,7 +25,7 @@
         <h1>BOXHEAD</h1>
         <span id="loading-status">격리 구역을 확인하는 중...</span>
         <div class="loading-track"><i id="loading-bar"></i></div>
-        <small>BACKROOM LOW · v1.0.0</small>
+        <small>BACKROOM LOW · v1.1.0</small>
       </div>
     </section>
 
@@ -148,6 +148,7 @@
       <div class="menu-tool-bar">
         <button id="fullscreen-start" class="settings-button" type="button">전체화면</button>
         <button id="controls-settings-start" class="settings-button" type="button">키보드·마우스 설정</button>
+        <button id="sound-settings-start" class="settings-button" type="button">사운드 설정</button>
         <button id="save-export" class="settings-button" type="button">저장 백업</button>
         <button id="save-import" class="settings-button" type="button">저장 복원</button>
         <input id="save-import-file" type="file" accept="application/json,.json" hidden />
@@ -173,18 +174,6 @@
             <option value="mid">보통 / 균형</option>
             <option value="high">높음 / 선명</option>
           </select>
-        </label>
-        <label>
-          전체 음량 <b id="master-volume-label">100%</b>
-          <input id="master-volume-range" type="range" min="0" max="100" value="100" />
-        </label>
-        <label>
-          효과음 <b id="sfx-volume-label">100%</b>
-          <input id="sfx-volume-range" type="range" min="0" max="100" value="100" />
-        </label>
-        <label>
-          배경음 / BGM <b id="bgm-volume-label">100%</b>
-          <input id="bgm-volume-range" type="range" min="0" max="100" value="100" />
         </label>
         <label>
           입력 장치
@@ -229,9 +218,32 @@
         <button id="fullscreen-pause" class="settings-button" type="button">전체화면</button>
         <button id="mobile-settings-pause" class="settings-button mobile-only" type="button">모바일 조작 설정</button>
         <button id="controls-settings-pause" class="settings-button" type="button">키보드·마우스 설정</button>
+        <button id="sound-settings-pause" class="settings-button" type="button">사운드 설정</button>
         <button id="resume-button" class="settings-button accent" type="button">계속하기</button>
         <button id="main-menu-button" class="settings-button danger" type="button">게임 종료 후 메인으로</button>
       </div>
+    </section>
+
+    <section id="sound-settings-screen" class="panel sound-panel" aria-labelledby="sound-title">
+      <p class="eyebrow">SOUND / MIX</p>
+      <h2 id="sound-title">전장의 소리</h2>
+      <p>총성과 발소리로 주변을 읽고, 음악과 환경음은 취향에 맞게 조절하세요.</p>
+      <div class="sound-sliders">
+        <label for="master-volume-range">전체 음량 <b id="master-volume-label">100%</b><input id="master-volume-range" type="range" min="0" max="100" value="100" /></label>
+        <label for="sfx-volume-range">효과음 <b id="sfx-volume-label">85%</b><input id="sfx-volume-range" type="range" min="0" max="100" value="85" /><small>무기 · 적 · 발소리 · 목표 알림</small></label>
+        <label for="bgm-volume-range">배경 음악 <b id="bgm-volume-label">65%</b><input id="bgm-volume-range" type="range" min="0" max="100" value="65" /><small>전투 상황에 따라 바뀌는 음악</small></label>
+        <label for="ambience-volume-range">환경음 <b id="ambience-volume-label">60%</b><input id="ambience-volume-range" type="range" min="0" max="100" value="60" /><small>형광등 · 환기구 · 공간의 공기</small></label>
+      </div>
+      <label class="sound-mix-label" for="sound-mix">듣기 모드
+        <select id="sound-mix"><option value="balanced">균형 · 기본</option><option value="headphones">이어폰 · 방향 구분 강조</option><option value="night">야간 · 폭발음과 작은 소리의 차이 완화</option></select>
+      </label>
+      <p id="sound-status" class="sound-status" role="status">소리 확인 버튼을 눌러보세요.</p>
+      <div class="sound-actions">
+        <button id="sound-test" class="settings-button" type="button">좌우 · 효과음 확인</button>
+        <button id="sound-reset" class="settings-button" type="button">권장 음량으로</button>
+        <button id="sound-settings-close" class="settings-button accent" type="button">완료</button>
+      </div>
+      <p class="sound-hint">설정은 이 브라우저에 저장됩니다. 온라인 협동에서는 설정 중에도 전투가 계속됩니다.</p>
     </section>
 
     <section id="game-over-screen" class="panel">
@@ -420,10 +432,10 @@
   </div>
 
   <script defer src="config.js"></script>
-  <script defer src="game.bundle.js?v=1.0.0"></script>
+  <script defer src="game.bundle.js?v=1.1.0"></script>
   <script>
     (() => {
-      const BUILD = '1.0.0';
+      const BUILD = '1.1.0';
       window.BOXHEAD_BUILD = BUILD;
       if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
       const reloadKey = `boxhead-controller-reload-${BUILD}`;

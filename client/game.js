@@ -1,9 +1,10 @@
+import {AudioBus} from './audio.js';
 import {NetAdapter} from './network.js';
 import {MAPS,MAP_KEYS as SURVIVAL_MAP_KEYS,DIFFICULTY,WEAPON_DEFS,enemyStats as getEnemyStats,pickEnemyType} from '../shared/arena.js';
 import {getMission,createMissionState,tickMission,missionProgress,missionHint,waveSpawnCount,MISSION_CATALOG} from '../shared/missions.js';
 import * as THREE from 'three';
 
-const GAME_BUILD = '1.0.0';
+const GAME_BUILD = '1.1.0';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -21,6 +22,7 @@ const UI = {
   createRoomBtn: $('create-room-button'), joinRoomBtn: $('join-room-button'), readyBtn: $('ready-button'), roomCodeInput: $('room-code-input'), lobbyRoomCode: $('lobby-room-code'), lobbyStatus: $('lobby-status-text'), netState: $('net-state'), netStatusText: $('net-status-text'),
   map: $('map-select'), diff: $('difficulty-select'), quality: $('quality-select'), startWave: $('start-wave-select'),
   pauseQuality: $('pause-quality-select'), masterVolume: $('master-volume-range'), sfxVolume: $('sfx-volume-range'), bgmVolume: $('bgm-volume-range'), masterVolumeLabel: $('master-volume-label'), sfxVolumeLabel: $('sfx-volume-label'), bgmVolumeLabel: $('bgm-volume-label'),
+  ambienceVolume:$('ambience-volume-range'), ambienceVolumeLabel:$('ambience-volume-label'), soundMix:$('sound-mix'), soundSettings:$('sound-settings-screen'), soundStatus:$('sound-status'),
   startFov: $('start-fov-range'), startFovLabel: $('start-fov-label'), pauseFov: $('pause-fov-range'), pauseFovLabel: $('pause-fov-label'),
   startCameraMotion: $('start-camera-motion'), pauseCameraMotion: $('pause-camera-motion'), pauseFlicker: $('pause-flicker'), pauseHighContrast: $('pause-high-contrast'),
   gameOverMainBtn: $('game-over-main-button'), rewardExtract: $('reward-extract'), careerSummary: $('career-summary'),
@@ -784,386 +786,6 @@ class MobileController {
   }
 }
 
-const MUSIC_PROFILE = {tempo:1,bass:1,lead:1,pulse:1,ambient:520,hum:62,upper:124.5,motif:[1,1,1,1]};
-
-class AudioBus {
-  constructor() {
-    this.ctx = null;
-    this.enabled = false;
-    this.stepGate = 0;
-    this.ambient = null;
-    this.bgm = null;
-    this.itemGate = 0;
-    this.masterGain = null;
-    this.sfxGain = null;
-    this.weaponGain = null;
-    this.impactGain = null;
-    
-    this.ambienceGain = null;
-    this.bgmGain = null;
-    this.musicDuckGain = null;
-    this.limiter = null;
-    this.musicMood = 'explore';
-    this.musicMoodTarget = 'explore';
-    this.musicMoodGate = 0;
-    
-    this.duckReleaseTimer = null;
-    this.volumes = { master: 1, sfx: 1, bgm: 1 };
-  }
-  unlock() {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) { this.enabled = false; return; }
-    try {
-      if (!this.ctx) this.ctx = new AC();
-      if (!this.masterGain) this.createVolumeGraph();
-      if (this.ctx.state === 'suspended') this.ctx.resume();
-      this.enabled = true;
-      this.applyVolumes();
-    } catch (_) {
-      this.enabled = false;
-    }
-  }
-  createVolumeGraph() {
-    if (!this.ctx || this.masterGain) return;
-    this.masterGain = this.ctx.createGain();
-    this.sfxGain = this.ctx.createGain();
-    this.weaponGain = this.ctx.createGain();
-    this.impactGain = this.ctx.createGain();
-    
-    this.ambienceGain = this.ctx.createGain();
-    this.bgmGain = this.ctx.createGain();
-    this.musicDuckGain = this.ctx.createGain();
-    this.limiter = this.ctx.createDynamicsCompressor();
-    this.limiter.threshold.value = -5;
-    this.limiter.knee.value = 10;
-    this.limiter.ratio.value = 7;
-    this.limiter.attack.value = .002;
-    this.limiter.release.value = .14;
-    for (const bus of [this.sfxGain, this.weaponGain, this.impactGain, this.dialogueGain, this.ambienceGain]) bus.connect(this.masterGain);
-    this.bgmGain.connect(this.musicDuckGain).connect(this.masterGain);
-    this.masterGain.connect(this.limiter);
-    this.limiter.connect(this.ctx.destination);
-    this.musicDuckGain.gain.value = 1;
-    this.applyVolumes();
-  }
-  setVolumes(next = {}) {
-    this.volumes.master = clamp(Number.isFinite(next.master) ? next.master : this.volumes.master, 0, 1);
-    this.volumes.sfx = clamp(Number.isFinite(next.sfx) ? next.sfx : this.volumes.sfx, 0, 1);
-    this.volumes.bgm = clamp(Number.isFinite(next.bgm) ? next.bgm : this.volumes.bgm, 0, 1);
-    this.applyVolumes();
-  }
-  applyVolumes() {
-    if (!this.ctx || !this.masterGain) return;
-    const t = this.ctx.currentTime;
-    this.masterGain.gain.setTargetAtTime(this.volumes.master, t, .015);
-    const s = this.volumes.sfx;
-    this.sfxGain.gain.setTargetAtTime(s * 1.55, t, .015);
-    this.weaponGain.gain.setTargetAtTime(s * 2.65, t, .010);
-    this.impactGain.gain.setTargetAtTime(s * 2.30, t, .010);
-    
-    this.ambienceGain.gain.setTargetAtTime(this.volumes.bgm * .72, t, .035);
-    this.bgmGain.gain.setTargetAtTime(this.volumes.bgm * 1.62, t, .035);
-  }
-  sfxDestination() { return this.sfxGain || this.ctx?.destination; }
-  weaponDestination() { return this.weaponGain || this.sfxDestination(); }
-  impactDestination() { return this.impactGain || this.sfxDestination(); }
-  dialogueDestination() { return this.dialogueGain || this.sfxDestination(); }
-  ambienceDestination() { return this.ambienceGain || this.bgmGain || this.ctx?.destination; }
-  bgmDestination() { return this.bgmGain || this.ctx?.destination; }
-  beep(freq = 220, dur = .05, type = 'square', gain = .03, freqEnd = null, dest = null) {
-    if (!this.enabled || !this.ctx) return;
-    const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const g = this.ctx.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t);
-    if (freqEnd) osc.frequency.exponentialRampToValueAtTime(Math.max(1, freqEnd), t + dur);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + .008);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(g).connect(dest || this.sfxDestination());
-    osc.start(t); osc.stop(t + dur + .02);
-  }
-  noise(dur = .08, gain = .035, filterType = 'lowpass', freq = 900, dest = null) {
-    if (!this.enabled || !this.ctx) return;
-    const sr = this.ctx.sampleRate;
-    const len = Math.max(1, Math.floor(sr * dur));
-    const buffer = this.ctx.createBuffer(1, len, sr);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < len; i++) {
-      const env = 1 - i / len;
-      data[i] = (Math.random() * 2 - 1) * env;
-    }
-    const src = this.ctx.createBufferSource();
-    src.buffer = buffer;
-    const filt = this.ctx.createBiquadFilter();
-    filt.type = filterType; filt.frequency.value = freq;
-    const g = this.ctx.createGain();
-    const t = this.ctx.currentTime;
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(.0001, t + dur);
-    src.connect(filt).connect(g).connect(dest || this.sfxDestination());
-    src.start(t); src.stop(t + dur + .02);
-  }
-  startAmbience() {
-    if (!this.enabled || !this.ctx || this.ambient) return;
-    const t = this.ctx.currentTime;
-    const profile = MUSIC_PROFILE;
-    const base = this.ctx.createOscillator();
-    const upper = this.ctx.createOscillator();
-    const wobble = this.ctx.createOscillator();
-    const wobbleGain = this.ctx.createGain();
-    const filt = this.ctx.createBiquadFilter();
-    const g = this.ctx.createGain();
-    // 어둡게 깔리는 저음 대신, 낡은 형광등이 계속 웅웅거리는 느낌.
-    base.type = 'sine'; base.frequency.value = profile.hum || 62;
-    upper.type = 'triangle'; upper.frequency.value = profile.upper || 124.5;
-    wobble.type = 'sine'; wobble.frequency.value = .11;
-    wobbleGain.gain.value = 4.2;
-    filt.type = 'lowpass'; filt.frequency.value = 520;
-    g.gain.value = .044;
-    wobble.connect(wobbleGain);
-    wobbleGain.connect(base.frequency);
-    base.connect(filt); upper.connect(filt);
-    filt.connect(g).connect(this.ambienceDestination());
-    base.start(t); upper.start(t); wobble.start(t);
-    this.ambient = { osc: base, upper, wobble, gain: g, filter: filt };
-  }
-  toneAt(freq = 220, start = 0, dur = .25, type = 'triangle', gain = .012, dest = null) {
-    if (!this.enabled || !this.ctx) return;
-    const osc = this.ctx.createOscillator();
-    const g = this.ctx.createGain();
-    const t = start || this.ctx.currentTime;
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + .018);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(g).connect(dest || this.sfxDestination());
-    osc.start(t); osc.stop(t + dur + .04);
-  }
-  
-  duckMusic(level = .5, hold = .12, release = .35) {
-    if (!this.ctx || !this.musicDuckGain) return;
-    const t = this.ctx.currentTime;
-    const target = clamp(level, .12, 1);
-    this.musicDuckGain.gain.cancelScheduledValues(t);
-    this.musicDuckGain.gain.setTargetAtTime(target, t, .012);
-    this.musicDuckGain.gain.setTargetAtTime(1, t + Math.max(.02, hold), Math.max(.04, release));
-  }
-  
-  missionStinger(kind = 'info') {
-    const dest = this.dialogueDestination();
-    const danger = kind === 'danger';
-    this.beep(danger ? 118 : 420, danger ? .22 : .14, 'sawtooth', danger ? .048 : .034, danger ? 52 : 680, dest);
-    setTimeout(() => this.beep(danger ? 82 : 620, .18, 'triangle', .028, danger ? 45 : 920, dest), 75);
-    this.duckMusic(danger ? .28 : .42, .24, .55);
-  }
-  
-  setMusicMood(mood = 'explore') {
-    if (!['explore', 'combat', 'danger'].includes(mood)) mood = 'explore';
-    this.musicMoodTarget = mood;
-    if (!this.bgm || !this.ctx) { this.musicMood = mood; return; }
-    if (this.musicMood === mood) return;
-    this.musicMood = mood;
-    const t = this.ctx.currentTime;
-    const gain = mood === 'danger' ? .245 : (mood === 'combat' ? .205 : .155);
-    const cutoff = mood === 'danger' ? 1180 : (mood === 'combat' ? 860 : 660);
-    this.bgm.master.gain.setTargetAtTime(gain, t, .28);
-    this.bgm.filter.frequency.setTargetAtTime(cutoff, t, .35);
-    if (this.ambient?.gain) this.ambient.gain.gain.setTargetAtTime(mood === 'danger' ? .058 : .044, t, .35);
-  }
-
-  startBgm() {
-    if (!this.enabled || !this.ctx || this.bgm) return;
-    const master = this.ctx.createGain();
-    const filter = this.ctx.createBiquadFilter();
-    const pulseFilter = this.ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = 700;
-    pulseFilter.type = 'bandpass';
-    pulseFilter.frequency.value = 160;
-    master.gain.value = .155;
-    filter.connect(master).connect(this.bgmDestination());
-    pulseFilter.connect(master);
-
-    // 밝은 조명 아래에서 불안한 백룸 공포감을 주는 코드 기반 적응형 BGM.
-    // explore: 반복되는 낮은 신스 / combat: 짧은 박동 / danger: 불협 리드와 빠른 펄스.
-    const bassExplore = [49, 49, 55, 52, 49, 46.25, 43.65, 46.25];
-    const bassCombat = [55, 55, 65.41, 58.27, 55, 73.42, 65.41, 58.27];
-    const bassDanger = [41.2, 49, 46.25, 43.65, 41.2, 58.27, 55, 46.25];
-    const leadExplore = [0, 196, 0, 185, 0, 174.61, 196, 0, 0, 146.83, 0, 164.81, 0, 174.61, 0, 0];
-    const leadCombat = [220, 0, 196, 0, 246.94, 0, 220, 196, 174.61, 0, 196, 0, 220, 246.94, 0, 196];
-    const leadDanger = [293.66, 277.18, 0, 246.94, 311.13, 0, 293.66, 233.08, 0, 220, 246.94, 0, 277.18, 0, 311.13, 0];
-    let step = 0;
-
-    const hitNoise = (t, gain = .018) => {
-      const sr = this.ctx.sampleRate;
-      const len = Math.floor(sr * .045);
-      const buffer = this.ctx.createBuffer(1, len, sr);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
-      const src = this.ctx.createBufferSource();
-      src.buffer = buffer;
-      const g = this.ctx.createGain();
-      g.gain.setValueAtTime(gain, t);
-      g.gain.exponentialRampToValueAtTime(.0001, t + .045);
-      src.connect(g).connect(pulseFilter);
-      src.start(t); src.stop(t + .06);
-    };
-
-    const scheduleBar = () => {
-      if (!this.enabled || !this.ctx || !this.bgm) return;
-      const mood = this.musicMood || 'explore';
-      const profile = MUSIC_PROFILE;
-      const base = this.ctx.currentTime + .035;
-      const bass = mood === 'danger' ? bassDanger : (mood === 'combat' ? bassCombat : bassExplore);
-      const lead = mood === 'danger' ? leadDanger : (mood === 'combat' ? leadCombat : leadExplore);
-      const beat = (mood === 'danger' ? .30 : (mood === 'combat' ? .36 : .48)) / Math.max(.65, profile.tempo || 1);
-      const bassGain = (mood === 'danger' ? .034 : (mood === 'combat' ? .028 : .022)) * profile.pulse;
-      const leadGain = (mood === 'danger' ? .018 : (mood === 'combat' ? .014 : .010)) * (2 - profile.pulse * .45);
-
-      for (let i = 0; i < 8; i++) {
-        const t = base + i * beat;
-        const motif = profile.motif?.[(step + i) % profile.motif.length] || 1;
-        const n = bass[(step + i) % bass.length] * profile.bass * motif;
-        this.toneAt(n, t, beat * .82, 'sawtooth', bassGain, filter);
-        if (mood !== 'explore') {
-          this.toneAt(n * 2.01, t + beat * .52, beat * .18, 'square', bassGain * .55, filter);
-          if (i % 2 === 0) hitNoise(t + .015, mood === 'danger' ? .024 : .016);
-        }
-      }
-      for (let i = 0; i < 16; i++) {
-        const motif = profile.motif?.[(step + Math.floor(i / 2)) % profile.motif.length] || 1;
-        const n = lead[(step * 2 + i) % lead.length] * profile.lead * motif;
-        if (!n) continue;
-        const t = base + i * (beat / 2);
-        this.toneAt(n, t, beat * .34, mood === 'danger' ? 'square' : 'triangle', leadGain, filter);
-      }
-      step = (step + 8) % 64;
-      if (this.bgm) this.bgm.timer = setTimeout(scheduleBar, Math.max(1900, beat * 8 * 1000 + 40));
-    };
-
-    this.bgm = { master, filter, pulseFilter, timer: null };
-    this.setMusicMood(this.musicMoodTarget || 'explore');
-    scheduleBar();
-  }
-
-  stopBgm() {
-    if (!this.bgm) return;
-    clearTimeout(this.bgm.timer);
-    try { this.bgm.master.disconnect(); } catch (_) {}
-    try { this.bgm.filter.disconnect(); } catch (_) {}
-    try { this.bgm.pulseFilter?.disconnect(); } catch (_) {}
-    this.bgm = null;
-  }
-  stopAll() {
-    this.stopBgm();
-    if (this.ambient) {
-      for (const node of [this.ambient.osc, this.ambient.upper, this.ambient.wobble]) {
-        try { node?.stop?.(); } catch (_) {}
-        try { node?.disconnect?.(); } catch (_) {}
-      }
-      try { this.ambient.gain?.disconnect?.(); } catch (_) {}
-      try { this.ambient.filter?.disconnect?.(); } catch (_) {}
-      this.ambient = null;
-    }
-  }
-  headshot() { this.beep(980, .055, 'triangle', .030, 1480); setTimeout(() => this.beep(520, .045, 'square', .018), 44); }
-  shieldHit() { this.beep(280, .035, 'square', .018, 170); this.noise(.045, .020, 'highpass', 1800); }
-  bomberWarn() { this.beep(980, .045, 'square', .016, 760); }
-  lowHpBeat() { this.beep(72, .08, 'sine', .018, 60); }
-  reload(kind = 'pistol') {
-    const base = kind === 'rocket' || kind === 'shotgun' || kind === 'railgun' ? 180 : 260;
-    this.beep(base, .055, 'triangle', .024, base * .7);
-    setTimeout(() => this.beep(base * 1.45, .04, 'triangle', .018, base), 95);
-    this.noise(.04, .018, 'highpass', 1200);
-  }
-
-  shoot(kind) {
-    const dest = this.weaponDestination();
-    const pitch = rand(.982, 1.018);
-    const heavy = ['shotgun','rocket','railgun'].includes(kind);
-    this.duckMusic(heavy ? .34 : .58, heavy ? .15 : .07, heavy ? .34 : .20);
-    const map = {
-      pistol: [330,.060,'square',.078,125], smg: [505,.036,'square',.052,165], shotgun: [142,.13,'sawtooth',.150,48],
-      rocket: [78,.22,'sawtooth',.135,28], railgun: [820,.12,'triangle',.110,310], grenade: [165,.08,'triangle',.072,70],
-      barrel: [112,.06,'square',.060,60], wall: [205,.055,'triangle',.052,115]
-    };
-    const base = [...(map[kind] || map.pistol)];
-    base[0] *= pitch; if (base[4]) base[4] *= pitch;
-    this.beep(...base, dest);
-    if (kind === 'pistol') {
-      this.noise(.052,.074,'bandpass',1850,dest);
-      setTimeout(() => this.beep(920*rand(.98,1.02),.026,'triangle',.022,540,dest),18);
-      setTimeout(() => this.noise(.075,.022,'lowpass',420,dest),30);
-    } else if (kind === 'smg') {
-      this.noise(.038,.052,'bandpass',2100,dest);
-      if (Math.random() < .42) setTimeout(() => this.beep(1080,.018,'triangle',.014,620,dest),12);
-    } else if (kind === 'shotgun') {
-      this.noise(.115,.155,'lowpass',760,dest);
-      this.noise(.070,.088,'highpass',1900,dest);
-      setTimeout(() => this.beep(210,.075,'triangle',.040,105,dest),55);
-    } else if (kind === 'rocket') {
-      this.noise(.22,.120,'lowpass',430,dest);
-      this.noise(.12,.055,'highpass',1500,dest);
-    } else if (kind === 'railgun') {
-      this.noise(.10,.068,'highpass',2600,dest);
-      setTimeout(() => this.beep(1320,.11,'sine',.046,460,dest),22);
-    }
-  }
-  hit(kind = 'flesh', strength = 1) {
-    const dest = this.impactDestination();
-    const s = clamp(Number(strength) || 1, .65, 2.2);
-    if (kind === 'head') {
-      this.noise(.055,.052*s,'bandpass',1150,dest); this.beep(170,.050,'sawtooth',.032*s,70,dest);
-    } else if (kind === 'armor') {
-      this.beep(410,.052,'square',.048*s,145,dest); this.noise(.060,.044*s,'highpass',2300,dest);
-    } else if (kind === 'shield') {
-      this.beep(620,.045,'square',.052*s,260,dest); this.noise(.055,.050*s,'highpass',2900,dest);
-    } else if (kind === 'core') {
-      this.beep(240,.070,'sawtooth',.052*s,520,dest); this.noise(.075,.052*s,'bandpass',920,dest);
-    } else if (kind === 'metal' || kind === 'wall') {
-      this.beep(kind === 'metal' ? 520 : 260,.042,'triangle',.038*s,kind === 'metal' ? 190 : 95,dest); this.noise(.048,.034*s,'highpass',1800,dest);
-    } else {
-      this.noise(.065,.060*s,'bandpass',780,dest); this.beep(92,.055,'sawtooth',.032*s,38,dest);
-    }
-  }
-  pickup() { this.beep(820, .045, 'triangle', .022, 1180); setTimeout(() => this.beep(1180, .04, 'triangle', .018), 50); }
-  itemSpawn() { if (!this.ctx || this.ctx.currentTime < this.itemGate) return; this.itemGate = this.ctx.currentTime + .55; this.beep(520, .035, 'triangle', .012, 680); }
-  unlockSound() { this.beep(650, .08, 'triangle', .028, 850); setTimeout(() => this.beep(980, .11, 'triangle', .025, 1320), 65); }
-  jump() { this.beep(260, .055, 'triangle', .020, 330); }
-  playerHit(kind = 'hit') {
-    const d = this.impactDestination();
-    this.duckMusic(kind === 'explosion' ? .25 : .52, .16, .38);
-    this.noise(kind === 'explosion' ? .16 : .10, kind === 'explosion' ? .105 : .072, 'lowpass', kind === 'explosion' ? 330 : 620, d);
-    this.beep(kind === 'fireball' ? 118 : 76, .12, 'sawtooth', kind === 'explosion' ? .068 : .050, 38, d);
-  }
-  earRing(strength = 1) { this.beep(1550, .32 * strength, 'sine', .016 * strength, 980); setTimeout(() => this.beep(2100, .18 * strength, 'sine', .010 * strength, 1700), 80); }
-  lowHpBreath() { this.noise(.18, .010, 'lowpass', 180); }
-  playerStep(sprinting = false, ads = 0) { this.noise(sprinting ? .045 : .035, sprinting ? .018 : .011, 'lowpass', ads > .5 ? 250 : 360); }
-  enemyStep(type = 'zombie') {
-    if (!this.enabled || !this.ctx) return;
-    const t = this.ctx.currentTime;
-    if (t < this.stepGate) return;
-    this.stepGate = t + (type === 'runner' || type === 'bomber' ? .045 : .075);
-    const freq = type === 'devil' ? 180 : (type === 'tank' ? 135 : (type === 'shield' ? 235 : 330));
-    const gain = type === 'devil' || type === 'tank' ? .028 : .014;
-    this.noise(type === 'devil' || type === 'tank' ? .055 : .035, gain, 'lowpass', freq);
-  }
-  enemyAttack(type = 'zombie') {
-    const heavy = type === 'devil' || type === 'tank' || type === 'shield';
-    this.noise(type === 'devil' ? .075 : .045, heavy ? .035 : .022, 'bandpass', type === 'devil' ? 320 : (type === 'tank' ? 240 : 620));
-  }
-  devilCast() { this.beep(190, .13, 'sawtooth', .026, 88); this.noise(.09, .018, 'lowpass', 260); }
-  fireballExplode() { this.noise(.10, .045, 'lowpass', 360); this.beep(58, .12, 'sawtooth', .035, 32); }
-  placeWall() { this.beep(155, .055, 'square', .020, 95); this.noise(.035, .016, 'lowpass', 400); }
-  placeMine() { this.beep(125, .045, 'triangle', .017, 85); this.beep(380, .035, 'triangle', .012, 240); }
-  wallCrack() { this.noise(.06, .030, 'highpass', 900); }
-  wallBreak() { this.noise(.16, .055, 'lowpass', 460); this.beep(75, .14, 'sawtooth', .040, 38); }
-  enemyDeath(type = 'zombie') { this.noise(.13, type === 'devil' ? .055 : .040, 'lowpass', type === 'devil' ? 320 : 520); this.beep(type === 'devil' ? 92 : 130, .09, 'sawtooth', .026, 48); }
-  explosion() { this.noise(.16, .06, 'lowpass', 360); this.beep(65, .16, 'sawtooth', .055, 32); }
-}
 
 class MiniMap {
   constructor(root) {
@@ -1601,7 +1223,7 @@ class Game {
     this.mobile?.setGameplayActive(false);
     document.body.classList.remove('mobile-playing', 'mobile-layout-edit');
     try { if (document.pointerLockElement) document.exitPointerLock?.(); } catch (_) {}
-    for (const panel of [UI.pause, UI.over, UI.reward, UI.mobileSettings, UI.controlsSettings]) panel?.classList.remove('show');
+    for (const panel of [UI.pause, UI.over, UI.reward, UI.mobileSettings, UI.controlsSettings, UI.soundSettings]) panel?.classList.remove('show');
     UI.loading?.classList.remove('show', 'leaving');
     UI.hud?.classList.add('hidden');
     UI.start?.classList.add('show');
@@ -1649,6 +1271,21 @@ class Game {
   }
 
   bindUI() {
+    const unlockAudio = () => {
+      if(this.audio.enabled && this.audio.ctx?.state==='running')return;
+      this.audio.unlock().then(ok=>{if(ok && this.running){this.audio.startAmbience();this.audio.startBgm();}});
+    };
+    document.addEventListener('pointerdown',unlockAudio,{capture:true,passive:true});
+    document.addEventListener('keydown',unlockAudio,{capture:true});
+    document.addEventListener('visibilitychange',()=>{this.audio.setHidden(document.hidden);if(!document.hidden&&this.audio.ctx)unlockAudio();});
+    this.audio.onStatus=()=>this.updateSoundStatus();
+    for(const id of ['sound-settings-start','sound-settings-pause'])$(id)?.addEventListener('click',()=>this.openSoundSettings());
+    $('sound-settings-close')?.addEventListener('click',()=>this.closeSoundSettings());
+    $('sound-test')?.addEventListener('click',async()=>{if(await this.audio.unlock()){this.audio.test();this.updateSoundStatus('왼쪽 → 오른쪽 → 발사 → 금속 타격 순서입니다.');}});
+    $('sound-reset')?.addEventListener('click',()=>{
+      UI.masterVolume.value='100';UI.sfxVolume.value='85';UI.bgmVolume.value='65';UI.ambienceVolume.value='60';UI.soundMix.value='balanced';
+      this.refreshVolumeLabels();this.syncSettingsFromMenu();this.savePreferences();this.updateSoundStatus('권장 음량으로 복원했습니다.');
+    });
     UI.survivalModeBtn?.addEventListener('click', () => this.setMenuMode('survival'));
 
     UI.singleModeBtn?.addEventListener('click', () => { this.net.leaveRoom();this.resetLobby();this.setPlayMode('single'); });
@@ -1750,6 +1387,7 @@ class Game {
       this.confirmRewardSelection();
     });
     document.addEventListener('keydown', (e) => {
+      if(UI.soundSettings?.classList.contains('show') && e.code==='Escape'){e.preventDefault();this.closeSoundSettings();return;}
       if (UI.controlsSettings?.classList.contains('show') && e.code === 'Escape') {
         e.preventDefault();
         this.closeControlsSettings();
@@ -1789,6 +1427,7 @@ class Game {
     setLabel(UI.masterVolumeLabel, UI.masterVolume?.value || 100);
     setLabel(UI.sfxVolumeLabel, UI.sfxVolume?.value || 100);
     setLabel(UI.bgmVolumeLabel, UI.bgmVolume?.value || 100);
+    setLabel(UI.ambienceVolumeLabel,UI.ambienceVolume?.value ?? 60);
     UI.pauseQuality?.addEventListener('change', () => {
       if (UI.quality) UI.quality.value = UI.pauseQuality.value;
       this.applyRuntimeQuality();
@@ -1804,12 +1443,15 @@ class Game {
       setLabel(UI.masterVolumeLabel, UI.masterVolume?.value || 0);
       setLabel(UI.sfxVolumeLabel, UI.sfxVolume?.value || 0);
       setLabel(UI.bgmVolumeLabel, UI.bgmVolume?.value || 0);
+      setLabel(UI.ambienceVolumeLabel,UI.ambienceVolume?.value ?? 0);
       this.syncSettingsFromMenu();
       this.savePreferences();
     };
     UI.masterVolume?.addEventListener('input', volumeHandler);
     UI.sfxVolume?.addEventListener('input', volumeHandler);
     UI.bgmVolume?.addEventListener('input', volumeHandler);
+    UI.ambienceVolume?.addEventListener('input',volumeHandler);
+    UI.soundMix?.addEventListener('change',volumeHandler);
     const accessibilityHandler = () => {
       const fov = Number(UI.pauseFov?.value || UI.startFov?.value || this.accessibility.fov || 72);
       const motion = UI.pauseCameraMotion?.value || UI.startCameraMotion?.value || 'full';
@@ -1870,6 +1512,8 @@ class Game {
       if (UI.masterVolume && Number.isFinite(saved.master)) UI.masterVolume.value = String(clamp(saved.master, 0, 100));
       if (UI.sfxVolume && Number.isFinite(saved.sfx)) UI.sfxVolume.value = String(clamp(saved.sfx, 0, 100));
       if (UI.bgmVolume && Number.isFinite(saved.bgm)) UI.bgmVolume.value = String(clamp(saved.bgm, 0, 100));
+      if(UI.ambienceVolume && Number.isFinite(saved.ambience ?? saved.bgm))UI.ambienceVolume.value=String(clamp(saved.ambience ?? saved.bgm,0,100));
+      if(UI.soundMix && ['balanced','headphones','night'].includes(saved.soundMix))UI.soundMix.value=saved.soundMix;
       this.accessibility.fov = clamp(Number(saved.fov) || this.accessibility.fov || 72, 60, 100);
       this.accessibility.cameraMotion = ['full','reduced','off'].includes(saved.cameraMotion) ? saved.cameraMotion : this.accessibility.cameraMotion;
       this.accessibility.flicker = typeof saved.flicker === 'boolean' ? saved.flicker : this.accessibility.flicker;
@@ -1884,6 +1528,7 @@ class Game {
         master: Number(UI.masterVolume?.value ?? 100),
         sfx: Number(UI.sfxVolume?.value ?? 100),
         bgm: Number(UI.bgmVolume?.value ?? 100),
+        ambience:Number(UI.ambienceVolume?.value ?? 60),soundMix:UI.soundMix?.value || 'balanced',
         fov: this.accessibility.fov,
         cameraMotion: this.accessibility.cameraMotion,
         flicker: this.accessibility.flicker,
@@ -1896,8 +1541,29 @@ class Game {
     this.audio.setVolumes({
       master: (Number(UI.masterVolume?.value ?? 100) || 0) / 100,
       sfx: (Number(UI.sfxVolume?.value ?? 100) || 0) / 100,
-      bgm: (Number(UI.bgmVolume?.value ?? 100) || 0) / 100
+      bgm: (Number(UI.bgmVolume?.value ?? 65) || 0) / 100,
+      ambience:(Number(UI.ambienceVolume?.value ?? 60) || 0)/100
     });
+    this.audio.setMix(UI.soundMix?.value || 'balanced');
+  }
+
+  refreshVolumeLabels() {
+    for(const [range,label] of [[UI.masterVolume,UI.masterVolumeLabel],[UI.sfxVolume,UI.sfxVolumeLabel],[UI.bgmVolume,UI.bgmVolumeLabel],[UI.ambienceVolume,UI.ambienceVolumeLabel]])if(label)label.textContent=`${range.value}%`;
+  }
+  updateSoundStatus(message='') {
+    if(!UI.soundStatus)return;
+    UI.soundStatus.textContent=this.audio.volumes.master===0?'전체 음량이 0%입니다. 음량을 올려주세요.':!this.audio.enabled?'소리 확인 버튼을 눌러 소리를 켜주세요.':message || (this.audio.volumes.sfx===0?'효과음이 0%입니다. 음악·환경음은 별도로 재생됩니다.':'소리 켜짐 · 이어폰에서는 좌우 방향을 더 쉽게 구분할 수 있습니다.');
+    UI.soundStatus.dataset.state=this.audio.enabled?'ready':'waiting';
+  }
+  openSoundSettings() {
+    this.soundSettingsReturn=this.running?'pause':'start';
+    if(this.running&&!this.paused)this.pause();
+    UI.start.classList.remove('show');UI.pause.classList.remove('show');UI.soundSettings.classList.add('show');
+    this.refreshVolumeLabels();this.audio.unlock();this.updateSoundStatus();
+  }
+  closeSoundSettings() {
+    UI.soundSettings.classList.remove('show');
+    if(this.running)UI.pause.classList.add('show');else if(!this.gameOver)UI.start.classList.add('show');
   }
 
   syncAccessibilityUI() {
@@ -2063,6 +1729,7 @@ class Game {
 
   resumeFromPause() {
     if (!this.running || this.gameOver) return;
+    this.audio.unlock();
     this.syncSettingsFromMenu();
     this.applyRuntimeQuality();
     this.paused = false;
@@ -2111,7 +1778,7 @@ class Game {
     this.suppressAutoPauseUntil = now() + .75;
     this.clearRunState(true);
     this.input.resetTransient();
-    this.audio.unlock();
+    this.audio.stopAll();this.audio.setBedPaused(false);this.audio.unlock();
     this.syncSettingsFromMenu();
     this.applyRuntimeQuality();
     this.resize();
@@ -2125,6 +1792,7 @@ class Game {
     this.audio.startBgm();
     const selectedSurvivalMap = SURVIVAL_MAP_KEYS.includes(UI.map?.value) ? UI.map.value : (SURVIVAL_MAP_KEYS.includes(this.survivalMapKey) ? this.survivalMapKey : 'box');
     this.mapKey = selectedSurvivalMap;
+    this.audio.setEnvironment(this.mapKey);this.audioProgress=null;this.audioPrepSecond=null;
     this.map = MAPS[this.mapKey] || MAPS.box;
     this.rememberSurvivalMapKey(this.mapKey);
     this.diff = DIFFICULTY[UI.diff.value] || DIFFICULTY.normal;
@@ -3006,11 +2674,11 @@ class Game {
     } else if (action.actionType === 'reloadStart') {
       r.reload = true;
       r.reloadPulse = Math.max(r.reloadPulse || 0, .9);
-      this.audio.reload?.(r.weapon);
+      this.playWorldSound(r.target.x,r.target.z,()=>this.audio.reload(r.weapon));
     } else if (action.actionType === 'reloadEnd' || action.actionType === 'reloadCancel') {
       r.reload = false;
       r.reloadPulse = 0;
-      if (action.actionType === 'reloadEnd') this.audio.beep(520, .045, 'triangle', .014);
+      if (action.actionType === 'reloadEnd') this.playWorldSound(r.target.x,r.target.z,()=>this.audio.reloadEnd());
     }
   }
 
@@ -3046,7 +2714,7 @@ class Game {
       if(UI.rewardExtract){UI.rewardExtract.hidden=g.wave%10!==0;UI.reward?.classList.toggle('can-extract',g.wave%10===0);UI.rewardExtract.textContent=this.serverExtractRequested?'친구의 탈출 동의 대기':'두 사람 탈출하기';}
       if(chosen && this.rewardOpen){this.rewardOpen=false;UI.reward.classList.remove('show');this.resetRewardSelection();}
     }else{this.serverRewardMode=false;this.serverRewardChosen=false;this.rewardOpen=false;UI.reward?.classList.remove('show');}
-    if(newLevel && g.phase==='combat')this.showCenterAlert('LEVEL '+g.wave+' · '+g.mission.label,g.mission.desc,g.mission.elite?'danger':'info',3);
+    if(newLevel && g.phase==='combat'){this.showCenterAlert('LEVEL '+g.wave+' · '+g.mission.label,g.mission.desc,g.mission.elite?'danger':'info',3);this.audio.cue(g.mission.elite?'boss':'start');}
     this.applyServerEvents((payload.events || []).filter(e=>!['rewardStart','prepStart','waveStart','teamWipe'].includes(e.type)));
     this.updateHud();
     if(g.phase==='gameover'){this.setConnectionBlocked(false);this.endGame(g.outcome || 'defeated');}
@@ -3182,8 +2850,8 @@ class Game {
     if (!e) return;
     if (deathFx && e.mesh?.parent) {
       this.spawnEnemyDeathDebris(e);
-      this.audio.enemyDeath(e.type);
     }
+    if(deathFx&&!e.deathSoundPlayed){e.deathSoundPlayed=true;this.playWorldSound(e.x,e.z,()=>this.audio.enemyDeath(e.type));}
     e.alive = false;
     if (e.mesh?.parent) this.scene.remove(e.mesh);
   }
@@ -3202,6 +2870,8 @@ class Game {
       if (e.walkSpeed > .05) {
         const pace = e.type === 'runner' ? 10.2 : (e.type === 'bomber' ? 8.6 : (e.type === 'tank' ? 3.7 : (e.type === 'devil' ? 4.2 : 6.2)));
         e.walkPhase += dt * pace * clamp(e.walkSpeed / Math.max(.1, e.speed || 1), .35, 1.55);
+        e.stepCd=(e.stepCd||0)-dt;
+        if(e.stepCd<=0&&dist2(e.x,e.z,this.player.x,this.player.z)<24*24){this.playWorldSound(e.x,e.z,()=>this.audio.enemyStep(e.type));e.stepCd=['runner','bomber'].includes(e.type)?.26:['tank','devil'].includes(e.type)?.55:.40;}
       }
       e.hitTimer = Math.max(0, (e.hitTimer || 0) - dt);
       e.attackAnim = Math.max(0, (e.attackAnim || 0) - dt);
@@ -3215,7 +2885,7 @@ class Game {
     for (const ev of events) {
       if (!ev || !ev.type) continue;
       const e = this.enemies.find(x => String(x.serverId ?? x.id) === String(ev.enemyId));
-      if(ev.type==='coreDestroyed'){this.spawnEnemySpawnFx(ev.x,ev.z,'bomber');this.audio.explosion();this.showToast('감염 코어 파괴');}
+      if(ev.type==='coreDestroyed'){this.spawnEnemySpawnFx(ev.x,ev.z,'bomber');this.playWorldSound(ev.x,ev.z,()=>this.audio.explosion());this.showToast('감염 코어 파괴');}
       if (ev.type === 'enemySpawn') this.spawnEnemySpawnFx(ev.x || 0, ev.z || 0, ev.enemyType || 'zombie');
       if (ev.type === 'enemyHit' && e) {
         e.hitTimer = e.hitMax = ev.part === 'head' ? .22 : .14;
@@ -3225,13 +2895,16 @@ class Game {
       }
       if (ev.type === 'enemyMelee' && e) {
         e.attackAnim = e.attackMax = e.type === 'tank' ? .50 : .42;
-        this.audio.enemyAttack(e.type);
+        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type));
       }
       if (ev.type === 'devilCast' && e) {
         e.castAnim = e.castMax = .55;
-        this.audio.devilCast();
+        this.playWorldSound(e.x,e.z,()=>this.audio.devilCast());
       }
-      if ((ev.type === 'enemyDeath' || ev.type === 'enemyExplode') && e) this.removeNetworkEnemy(e, true);
+      if (ev.type === 'enemyDeath' || ev.type === 'enemyExplode') {
+        if(e)this.removeNetworkEnemy(e,true);else this.playWorldSound(ev.x,ev.z,()=>this.audio.enemyDeath(ev.enemyType||'zombie'));
+        if(ev.type==='enemyExplode'||ev.enemyType==='bomber')this.playWorldSound(ev.x,ev.z,()=>this.audio.explosion());
+      }
       if (ev.type === 'waveStart') { this.serverRewardMode = false; this.rewardOpen = false; UI.reward?.classList.remove('show'); this.showToast(`Wave ${ev.wave}`); }
       if (ev.type === 'rewardStart') this.showServerRewardChoices(ev.choices || [], ev.wave || this.wave);
       if (ev.type === 'rewardChosen') this.showToast(ev.playerId === this.net?.socket?.id ? '보상 선택 완료' : '상대가 보상을 선택했다');
@@ -3240,17 +2913,17 @@ class Game {
       if (ev.type === 'mineCreate') this.audio.placeMine();
       if (ev.type === 'wallDamage') this.audio.wallCrack();
       if (ev.type === 'wallBreak') this.audio.wallBreak();
-      if (ev.type === 'mineExplode') this.explode(ev.x || 0, ev.z || 0, ev.radius || 5.8, 0, false);
+      if (ev.type === 'mineExplode') {this.explode(ev.x || 0, ev.z || 0, ev.radius || 5.8, 0, false);this.playWorldSound(ev.x,ev.z,()=>this.audio.explosion());}
       if (ev.type === 'itemSpawn') this.audio.itemSpawn();
       if (ev.type === 'serverFire' && ev.playerId === this.net?.socket?.id && ev.weaponState) this.syncLocalWeaponState(ev.weaponState);
       if ((ev.type === 'reloadStart' || ev.type === 'reloadEnd' || ev.type === 'reloadCancel') && ev.playerId === this.net?.socket?.id && ev.weaponState) this.syncLocalWeaponState(ev.weaponState);
-      if (ev.type === 'projectileExplode') { this.explode(ev.x || 0, ev.z || 0, ev.radius || 5.5, 0, false); if (ev.kind === 'rocket' || ev.kind === 'grenade') this.audio.explosion?.(); }
+      if (ev.type === 'projectileExplode') { this.explode(ev.x || 0, ev.z || 0, ev.radius || 5.5, 0, false); this.playWorldSound(ev.x,ev.z,()=>ev.kind==='fireball'?this.audio.fireballExplode():this.audio.explosion()); }
       if (ev.type === 'playerExplodeHit' && ev.playerId === this.net?.socket?.id) this.damagePlayer(Number(ev.amount || 1), { x: ev.x || this.player.x, z: ev.z || this.player.z - 1 }, 'explosion');
       if (ev.type === 'itemPickup') { if (ev.playerId === this.net?.socket?.id) { if (ev.weaponState) this.syncLocalWeaponState(ev.weaponState); this.showToast(ev.itemKind === 'health' ? '회복 상자 획득' : '탄약 상자 획득'); } this.audio.pickup(); }
       if (ev.type === 'medkitUse') { if (ev.playerId === this.net?.socket?.id) this.showToast(`회복키트 사용 HP +${Math.ceil(ev.amount || 0)}`); this.audio.pickup(); }
       if (ev.type === 'allyHeal') { if (ev.healerId === this.net?.socket?.id) this.showToast(`아군 치료 HP +${Math.ceil(ev.amount || 0)}`); if (ev.targetId === this.net?.socket?.id) this.showToast(`아군에게 치료받음 HP +${Math.ceil(ev.amount || 0)}`); this.audio.pickup(); }
-      if (ev.type === 'playerDowned') { if (ev.playerId === this.net?.socket?.id) { this.downed = true; this.hp = 0; this.showToast('쓰러짐: 아군 부활 대기'); } else this.showToast('아군이 쓰러짐'); this.audio.beep(150, .18, 'sawtooth', .030); }
-      if (ev.type === 'allyRevive' || ev.type === 'playerRevived') { if ((ev.playerId || ev.targetId) === this.net?.socket?.id) { this.downed = false; this.showToast('아군이 부활시킴'); } else if (ev.healerId === this.net?.socket?.id) this.showToast('아군 부활 완료'); this.audio.pickup(); }
+      if (ev.type === 'playerDowned') { if (ev.playerId === this.net?.socket?.id) { this.downed = true; this.hp = 0; this.showToast('쓰러짐: 아군 부활 대기'); } else this.showToast('아군이 쓰러짐'); this.audio.cue('down'); }
+      if (ev.type === 'allyRevive' || ev.type === 'playerRevived') { if ((ev.playerId || ev.targetId) === this.net?.socket?.id) { this.downed = false; this.showToast('아군이 부활시킴'); } else if (ev.healerId === this.net?.socket?.id) this.showToast('아군 부활 완료'); this.audio.cue('revive'); }
       if (ev.type === 'allyAssistFail') { if (ev.healerId === this.net?.socket?.id) this.showToast(ev.reason === 'noKit' ? '회복키트 부족' : ev.reason === 'far' ? '아군이 너무 멂' : '치료 불가'); }
       if (ev.type === 'teamWipe') { this.showToast('팀 전멸'); this.endGame(); }
     }
@@ -3343,7 +3016,7 @@ class Game {
     this.renderRewardChoices(prepared);
     UI.reward?.classList.add('show');
     this.mobile?.setGameplayActive(false);
-    this.audio.beep(660, .10, 'triangle', .035);
+    this.audio.cue('complete');
   }
 
   removeRemotePlayer(playerId) {
@@ -3384,6 +3057,8 @@ class Game {
       const moved = Math.hypot(mesh.position.x - (r._lastX ?? mesh.position.x), mesh.position.z - (r._lastZ ?? mesh.position.z));
       const speed = moved / Math.max(.001, dt);
       r._lastX = mesh.position.x; r._lastZ = mesh.position.z;
+      r.audioStepCd=(r.audioStepCd||0)-dt;
+      if(speed>.4&&r.audioStepCd<=0){this.playWorldSound(mesh.position.x,mesh.position.z,()=>this.audio.playerStep(speed>5,0));r.audioStepCd=speed>5?.25:.40;}
       const walk = clamp(Math.max(r.move || 0, speed / 5.5), 0, 1);
       r.walkPhase += dt * (2.4 + walk * 5.2);
       r.firePulse = Math.max(0, (r.firePulse || 0) - dt);
@@ -3558,6 +3233,7 @@ class Game {
     if(m.type==='core'){this.spawnObjectiveCores(m.coreCount);this.missionState.coreRemaining=this.objectiveCores.length;this.currentMission.coreCount=this.objectiveCores.length;}
     this.syncMissionTargets();this.missionTimer=this.missionState.timer;
     this.showCenterAlert('LEVEL '+this.wave+' · '+m.label,m.desc,m.elite?'danger':'info',3.2);
+    this.audio.cue(m.elite?'boss':'start');
   }
 
   missionObjectiveText() { return missionHint(this.currentMission,this.missionState,{remaining:this.spawnQueue+this.enemies.filter(e=>e.alive).length}); }
@@ -3574,7 +3250,7 @@ class Game {
     if(this.missionCompletePending)return;this.missionCompletePending=true;this.spawnQueue=0;
     for(const e of this.enemies){e.alive=false;if(e.mesh?.parent)this.scene.remove(e.mesh);}
     for(const p of this.projectiles){p.alive=false;p.dead=true;if(p.mesh?.parent)this.scene.remove(p.mesh);}this.projectiles=[];
-    this.audio.missionStinger('info');this.completeWave();
+    this.completeWave();
   }
 
   findCoreSpawnPoint(radius = 1.2) {
@@ -3716,7 +3392,7 @@ class Game {
     this.spawnCoreHitFx(c, 'explosion');
     if (c.mesh?.parent) this.scene.remove(c.mesh);
     if (score) this.score += 180 + this.wave * 15;
-    this.audio.explosion();
+    this.playWorldSound(c.x,c.z,()=>this.audio.explosion());
     this.showToast('감염 코어 파괴');
   }
 
@@ -3916,7 +3592,9 @@ class Game {
     const dtRaw = this.clock.getDelta();
     const dt = Math.min(dtRaw, this.effectiveQualityKey === 'ultra' ? .050 : .040);
     this.frameNumber++;
+    if(this.player)this.audio.setListener(this.player.x,this.player.z,this.yaw);
     if (this.running && !this.paused && !this.gameOver && !this.connectionBlocked) this.update(dt);
+    this.updateAudioState();
     this.renderer.render(this.scene, this.camera);
     this.trackFps(dtRaw);
   }
@@ -4038,7 +3716,35 @@ class Game {
     let mood = 'explore';
     if (lowHp || nearest < 5.2 || enemyCount >= 16 || ['survive','core','rush','blackout'].includes(this.currentMission?.type)) mood = 'danger';
     else if (enemyCount >= 6 || hasHeavyThreat || this.wave >= 7) mood = 'combat';
+    if(this.rewardOpen||this.prepPhase)mood='explore';
     this.audio.setMusicMood(mood);
+  }
+
+  playWorldSound(x,z,play) {
+    if(!this.player || !Number.isFinite(x) || !Number.isFinite(z))return;
+    if(dist2(x,z,this.player.x,this.player.z)>60*60)return;
+    this.audio.setListener(this.player.x,this.player.z,this.yaw);
+    const blocked=!this.lineClear2D(this.player.x,this.player.z,x,z,.08);
+    this.audio.at(x,z,play,blocked);
+  }
+
+  updateAudioState() {
+    if(!this.running)return;
+    this.audio.setBedPaused(this.connectionBlocked || (this.paused && this.lobby.mode!=='coop'));
+    if(this.connectionBlocked || (this.paused && this.lobby.mode!=='coop'))return;
+    if(this.prepPhase){
+      const second=Math.ceil(this.prepTimer);
+      if(second>0 && second<=3 && second!==this.audioPrepSecond)this.audio.countdown();
+      this.audioPrepSecond=second;
+    }else this.audioPrepSecond=null;
+    const m=this.currentMission,s=this.missionState;if(!m||!s)return;
+    if(this.audioProgress?.wave!==this.wave){this.audioProgress={wave:this.wave,relay:s.progress||0};return;}
+    if(m.type==='relay'){
+      if(s.progress>this.audioProgress.relay&&!this.rewardOpen)this.audio.cue('relay');
+      this.audioProgress.relay=s.progress;
+      const target=s.targets.find(t=>t.id===s.activeTarget);
+      if(target&&!target.done&&this.input.actionDown('interact')&&dist2(target.x,target.z,this.player.x,this.player.z)<=target.radius**2)this.audio.objectiveTick(target.progress/m.interactTime);
+    }else if(m.type==='holdout'&&s.active&&!this.rewardOpen)this.audio.objectiveTick(s.progress/m.targetTime);
   }
 
   drawStartMapPreview() {
@@ -4297,11 +4003,11 @@ class Game {
     if (!this.canMagazineReload(w)) { this.showToast('이 무기는 장전 없음'); return; }
     if (this.reload?.active) return;
     if ((this.mag[w.id] || 0) >= w.magSize) { this.showToast('탄창 가득함'); return; }
-    if (this.ammo[w.id] !== Infinity && (this.ammo[w.id] || 0) <= 0) { this.showToast('예비 탄약 없음'); this.audio.beep(120, .05, 'square', .020); return; }
+    if (this.ammo[w.id] !== Infinity && (this.ammo[w.id] || 0) <= 0) { this.showToast('예비 탄약 없음'); this.audio.empty(); return; }
     const dur = (w.reloadTime || 1.2) * (this.upgrades?.reload || 1);
     this.reload = { active: true, weapon: w.id, timer: dur, duration: dur };
     this.showToast(`${w.name} 재장전`);
-    this.audio.reload?.(w.id) || this.audio.beep(240, .08, 'triangle', .024);
+    this.audio.reload(w.id);
     this.net?.sendAction?.('reloadStart', w);
   }
 
@@ -4329,7 +4035,7 @@ class Game {
       this.ammo[w.id] = Math.max(0, (this.ammo[w.id] || 0) - take);
     }
     this.reload.active = false;
-    this.audio.beep(520, .05, 'triangle', .020);
+    this.audio.reloadEnd();
     this.net?.sendAction?.('reloadEnd', w);
     if (this.viewWeapon) { this.viewWeapon.rotation.set(-.06, -.08, 0); this.viewWeapon.position.set(.34, -.33, -.78); }
     if (this.viewLeftHand) this.viewLeftHand.rotation.set(0,0,0);
@@ -4354,7 +4060,7 @@ class Game {
     if (!Number.isFinite(this.ammo[w.id]) && this.ammo[w.id] !== Infinity) this.ammo[w.id] = 0;
     if (this.canMagazineReload(w)) {
       if ((this.mag[w.id] || 0) <= 0) { this.reloadSelected(); return; }
-    } else if (Number.isFinite(w.ammoMax) && (this.ammo[w.id] || 0) <= 0) { this.audio.beep(120, .04, 'square', .018); return; }
+    } else if (Number.isFinite(w.ammoMax) && (this.ammo[w.id] || 0) <= 0) { this.audio.empty(); return; }
 
     this.cooldowns[w.id] = t + w.cooldown;
     const serverAuth = this.usesServerEnemyAuthority();
@@ -4695,7 +4401,7 @@ class Game {
     const dir = this.lookDirection(action.yaw ?? r.target?.yaw ?? r.yaw, action.pitch ?? r.target?.pitch ?? r.pitch);
     if (['grenade', 'rocket'].includes(weaponId)) this.spawnRemoteThrownVisual(r, dir, weaponId);
     else if (weaponId !== 'wall' && weaponId !== 'barrel') this.spawnRemoteBulletVisual(r, dir, weaponId);
-    this.audio.shoot(weaponId);
+    this.playWorldSound(r.target.x,r.target.z,()=>this.audio.shoot(weaponId));
   }
 
   spawnMuzzleFlash(start, dir, rail = false) {
@@ -5001,7 +4707,7 @@ class Game {
         const warnRange = e.radius + this.player.radius + 3.15;
         if (!playerWallBlocker && d < warnRange) {
           e.bomberFlash = Math.max(e.bomberFlash || 0, .22);
-          if (!e.bomberWarned) { e.bomberWarned = true; this.audio.bomberWarn(); }
+          if (!e.bomberWarned) { e.bomberWarned = true; this.playWorldSound(e.x,e.z,()=>this.audio.bomberWarn()); }
         } else if (d > warnRange + .8) {
           e.bomberWarned = false;
         }
@@ -5040,13 +4746,13 @@ class Game {
         e.attackMax = e.attackAnim;
         e.stun = Math.max(e.stun || 0, .08);
         this.damagePlayer(e.damage * (e.type === 'runner' ? .46 : (e.type === 'tank' ? .72 : .60)), e, 'melee');
-        this.audio.enemyAttack(e.type);
+        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type));
       } else if (!playerWallBlocker && e.meleeCd <= 0 && e.type === 'devil' && (d < devilClawRange)) {
         e.meleeCd = 1.15;
         e.attackAnim = .40;
         e.attackMax = .40;
         this.damagePlayer(e.damage * .48, e, 'melee');
-        this.audio.enemyAttack(e.type);
+        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type));
       }
       e.walkSpeed = Math.hypot(e.x - prevX, e.z - prevZ) / Math.max(.001, dt);
       const desiredSpeed = Math.hypot(e.vx || 0, e.vz || 0);
@@ -5067,8 +4773,8 @@ class Game {
         const pace = e.type === 'runner' ? 10.2 : (e.type === 'bomber' ? 8.6 : (e.type === 'tank' ? 3.7 : (e.type === 'devil' ? 4.2 : 6.2)));
         e.walkPhase += dt * pace * clamp(e.walkSpeed / Math.max(.1, e.speed), .35, 1.55);
         e.stepCd = Math.max(0, (e.stepCd || 0) - dt);
-        if (!this.quality?.simpleModels && e.stepCd <= 0 && d < 24) {
-          this.audio.enemyStep(e.type);
+        if (e.stepCd <= 0 && d < 24) {
+          this.playWorldSound(e.x,e.z,()=>this.audio.enemyStep(e.type));
           e.stepCd = e.type === 'runner' || e.type === 'bomber' ? .23 : (e.type === 'tank' ? .58 : (e.type === 'devil' ? .52 : .38));
         }
       } else {
@@ -5191,7 +4897,7 @@ class Game {
     e.stun = Math.max(e.stun || 0, .10);
     const power = e.damage * (e.type === 'runner' ? .95 : (e.type === 'tank' ? 2.25 : 1.22)) * (e.wallPower || 1);
     this.damageWall(wall, power, 'claw', { x: p.x, y: 1.18, z: p.z });
-    this.audio.enemyAttack(e.type);
+    this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type));
     return true;
   }
 
@@ -5874,7 +5580,7 @@ class Game {
       mesh.position.set(e.x + sx * .45, 1.22, e.z + sz * .45);
       this.scene.add(mesh);
       this.projectiles.push({ kind: 'fireball', mesh, x: mesh.position.x, z: mesh.position.z, y: mesh.position.y, vx: sx * 10.5, vz: sz * 10.5, vy: 0, life: 3.2, radius: 3.8, damage: 18 * this.diff.enemyDamage });
-      this.audio.devilCast();
+      this.playWorldSound(e.x,e.z,()=>this.audio.devilCast());
     }
   }
 
@@ -6037,7 +5743,7 @@ class Game {
   detonateProjectile(p) {
     if (p.dead) return;
     p.dead = true;
-    if (p.kind === 'fireball') { this.audio.fireballExplode(); this.explode(p.x, p.z, 2.5, 0, false, COLORS.casterExplosion); }
+    if (p.kind === 'fireball') { this.playWorldSound(p.x,p.z,()=>this.audio.fireballExplode()); this.explode(p.x, p.z, 2.5, 0, false, COLORS.casterExplosion); }
     else this.explode(p.x, p.z, p.radius, p.damage, true);
   }
 
@@ -6063,7 +5769,7 @@ class Game {
       ring.position.set(x, .07, z); this.scene.add(ring);
       this.fx.push({ mesh: ring, life: .28, max: .28, scaleOut: true });
     }
-    if (damage > 0) this.audio.explosion();
+    if (damage > 0) this.playWorldSound(x,z,()=>this.audio.explosion());
     if (hurtsEnemies && damage > 0) {
       for (const e of this.enemies) if (e.alive) {
         const d = Math.sqrt(dist2(x,z,e.x,e.z));
@@ -6211,7 +5917,7 @@ class Game {
     if (!e.alive) return;
     e.alive = false;
     this.spawnEnemyDeathDebris(e);
-    this.audio.enemyDeath(e.type);
+    this.playWorldSound(e.x,e.z,()=>this.audio.enemyDeath(e.type));
     if (e.mesh?.parent) this.scene.remove(e.mesh);
     this.kills++;
     this.score += Math.round(e.score);
@@ -6701,7 +6407,7 @@ class Game {
     UI.reward?.classList.toggle('can-extract', canExtract);
     this.renderRewardChoices(pool);
     UI.reward?.classList.add('show');
-    this.audio.beep(660, .10, 'triangle', .035);
+    this.audio.cue('complete');
   }
 
   usesMobileRewardConfirmation() {
@@ -6935,6 +6641,7 @@ class Game {
     this.runOutcome = outcome;
     const record = this.saveBestStats();
     this.recordCareer(outcome);
+    this.audio.stopAll();this.audio.cue(outcome==='extracted'?'extracted':'defeated');UI.soundSettings?.classList.remove('show');
     this.gameOver = true;
     this.running = false;this.paused=false;UI.pause?.classList.remove('show');UI.reward?.classList.remove('show');UI.connectionOverlay?.classList.remove('show');this.connectionBlocked=false;
     if(UI.restartBtn)UI.restartBtn.textContent=this.lobby.mode==='coop'?'로비로 돌아가기':'다시 시작';
@@ -6971,6 +6678,7 @@ class Game {
   }
   setConnectionBlocked(blocked,title='',copy='') {
     const wasBlocked=this.connectionBlocked;this.connectionBlocked=!!blocked;
+    if(wasBlocked!==!!blocked&&this.running)this.audio.cue(blocked?'disconnected':'connected');
     UI.connectionOverlay?.classList.toggle('show',!!blocked);
     if(UI.connectionTitle)UI.connectionTitle.textContent=title || '친구의 연결을 기다립니다';if(UI.connectionCopy)UI.connectionCopy.textContent=copy || '최대 2분 동안 현재 진행을 보관합니다.';
     if(blocked){this.input.resetTransient();this.net.sendInput(true);this.mobile?.setGameplayActive(false);try{document.exitPointerLock?.();}catch{}}
