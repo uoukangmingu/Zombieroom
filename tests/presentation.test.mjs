@@ -9,7 +9,7 @@ test('all six enemy rigs animate independently, with bounded lightweight geometr
  const kit=new VisualFactory(),types=['zombie','runner','tank','devil','bomber','shield'],poses=[];
  for(const lite of [false,true])for(const type of types){
   const mesh=kit.enemy(type,lite),other=kit.enemy(type,lite);assert.notEqual(mesh.userData.head,other.userData.head);
-  let draws=0;mesh.traverse(o=>{if(o.isMesh){draws++;assert.ok(o.geometry.attributes.position.count>0);}});if(lite)assert.ok(draws<=8,`${type} uses ${draws} draws`);
+  let draws=0,outlines=0;mesh.traverse(o=>{if(o.userData.outline)outlines++;if(o.isMesh){draws++;assert.ok(o.geometry.attributes.position.count>0);}});assert.ok(outlines>=6,'classic silhouette must retain its black hull');if(lite)assert.ok(draws<=18,`${type} uses ${draws} draws`);
   animateEnemy({mesh,type,id:3,x:2,z:4,walkSpeed:2,speed:2,walkPhase:1.2,attackAnim:.2,attackMax:.4,castAnim:.275,castMax:.55},2,true);
   assert.equal(mesh.position.x,2);assert.equal(mesh.position.z,4);mesh.traverse(o=>assert.ok([...o.position,...o.rotation.toArray().slice(0,3),...o.scale].every(Number.isFinite)));
   assert.ok(Math.abs(other.userData.head.rotation.z)<1e-10);if(!lite)poses.push([mesh.rotation.x,mesh.userData.leftArm.rotation.x,mesh.userData.rightArm.rotation.x].join(','));

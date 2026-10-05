@@ -155,7 +155,7 @@ test('server handshake identifies the build and rejects incompatible clients',as
  const bad=io(`http://127.0.0.1:${port}`,{transports:['websocket'],reconnection:false,auth:{protocol:4}});clients.push(bad);
  const err=await event(bad,'connect_error');assert.equal(err.data.versionMismatch,true);assert.equal(server.rooms.size,0);
  const good=io(`http://127.0.0.1:${port}`,{transports:['websocket'],reconnection:false,auth:{protocol:6}});clients.push(good);
- const info=await event(good,'serverInfo');assert.equal(info.protocol,6);assert.equal(info.version,'1.3.0');assert.ok(Array.isArray(info.lanUrls));
+ const info=await event(good,'serverInfo');assert.equal(info.protocol,6);assert.equal(info.version,'1.3.1');assert.ok(Array.isArray(info.lanUrls));
 });
 
 test('mobile analog movement scales speed, clamps untrusted axes and clears stale input',async t=>{

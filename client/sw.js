@@ -1,4 +1,4 @@
-const BUILD = '1.3.0';
+const BUILD = '1.3.1';
 const CACHE_NAME = `boxhead-backroom-low-v${BUILD}-network-first`;
 const CORE_ASSETS = [
   `./index.html?build=${BUILD}`,

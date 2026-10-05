@@ -9,7 +9,7 @@ import {MAPS,MAP_KEYS as SURVIVAL_MAP_KEYS,DIFFICULTY,WEAPON_DEFS,enemyStats as 
 import {getMission,createMissionState,tickMission,missionProgress,missionHint,waveSpawnCount,MISSION_CATALOG} from '../shared/missions.js';
 import * as THREE from 'three';
 
-const GAME_BUILD = '1.3.0';
+const GAME_BUILD = '1.3.1';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
@@ -3060,8 +3060,8 @@ class Game {
     while(this.camera.children.length)this.camera.remove(this.camera.children[0]);
     const g=new THREE.Group();g.position.set(.34,-.33,-.78);g.scale.setScalar(.72);
     this.weaponAttachmentGroup=new THREE.Group();g.add(this.weaponAttachmentGroup);
-    this.viewLeftHand=this.addPart(g,this.geos.lowBox,this.materials.weaponDark,-.15,-.17,-.17,.14,.14,.23);
-    this.viewRightHand=this.addPart(g,this.geos.lowBox,this.materials.weaponDark,.075,-.25,.18,.15,.17,.21);
+    this.viewLeftHand=this.addPart(g,this.geos.lowBox,this.materials.skin,-.15,-.17,-.17,.14,.14,.23);
+    this.viewRightHand=this.addPart(g,this.geos.lowBox,this.materials.skin,.075,-.25,.18,.15,.17,.21);
     this.viewForearm=this.addPart(g,this.geos.lowBox,this.materials.shirtBlack,.1,-.30,.37,.18,.17,.30);
     this.camera.add(g);this.viewWeapon=g;this.updateViewWeapon();
   }

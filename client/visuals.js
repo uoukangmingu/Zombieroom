@@ -1,121 +1,147 @@
 import * as THREE from 'three';
 import {mergeGeometries} from 'three/addons/utils/BufferGeometryUtils.js';
-import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
+import {buildClassicEnemy,addClassicWeaponParts} from './classic-parts.js';
 
-const C={dark:0x17232b,metal:0x677a80,edge:0xb2c2bc,ivory:0xc6c7ae,olive:0x4c6255,orange:0xe58c37,red:0xd45139,teal:0x399a98,cyan:0x7feada,navy:0x344d64,purple:0x59486e,black:0x0c151c};
-const ENEMY_COLORS={zombie:[C.ivory,C.olive,C.orange],runner:[C.teal,C.dark,C.ivory],tank:[0x59615f,C.dark,0xe9b44d],devil:[C.purple,0x251e39,C.cyan],bomber:[C.orange,C.dark,C.red],shield:[C.navy,C.dark,0x99b5ba]};
+// Palette and proportions deliberately match the original cartoon art.
+const C={outline:0x111111,skin:0xf0c39f,hair:0x060608,shirtBlack:0x09090b,skinHighlight:0xffe1bd,
+  iceBlue:0xb8d2e8,gloveBlue:0x8fb3cc,zombieSuit:0xf5f2df,zombieStripe:0xf19b24,
+  runnerSuit:0x31c7e8,runnerStripe:0xd9fbff,runnerFace:0x0d4f67,
+  devilRed:0x5b2a86,devilDark:0x160d2d,devilEye:0xe5b7ff,casterCore:0x78f8ff,
+  tankSuit:0x5f6670,tankArmor:0x2b3038,tankStripe:0xffc13b,
+  bomberSuit:0xffb13d,bomberVest:0x2b2116,bomberRed:0xff3030,
+  shieldSuit:0xe9edf2,shieldPlate:0x244c7a,shieldEdge:0x9fd8ff,shoeBlack:0x0a0a0c,
+  weaponDark:0x1e2329,weaponMetal:0x555d66,gunPistol:0x242a33,gunSmg:0x1f4d3a,gunShotgun:0x6b3d22,
+  gunGrenade:0x3d6b2e,gunMine:0x2c3035,gunWall:0xd5a92f,gunRocket:0x8e2e26,gunRail:0x1e6f82,
+  gunAccent:0x7bf7ff,gunRedAccent:0xff4b35,gunYellowAccent:0xffd45a,mineDark:0x15171a,mineMetal:0x34383e,fakeWall:0xd5c76d,trim:0x2c2415};
+const D={lowBox:[1,1,1],charHead:[.72,.72,.72],charTorso:[.78,.92,.42],charArm:[.22,.76,.24],charLeg:[.28,.56,.26],charShoe:[.38,.17,.48],facePanel:[.5,.32,.026],hairCap:[.74,.20,.74],horn:[.34,.92,.34,'cone'],sphere:[.5,.5,.5,'sphere'],mine:[1.3,.18,1.3,'cylinder'],mineButton:[.6,.08,.6,'cylinder']};
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-const piece=(x,y,z,w,h,d,color,shape='box',rx=0,ry=0,rz=0)=>({x,y,z,w,h,d,color,shape,rx,ry,rz});
-const b=piece;
+const b=(x,y,z,w,h,d,color,shape='box',rx=0,ry=0,rz=0)=>({x,y,z,w,h,d,color,shape,rx,ry,rz});
+const WEAPON_SHAPES={pistol:[.28,.20,.62,.10,.10,.40,.31],smg:[.32,.20,.88,.11,.10,.70,.40],shotgun:[.42,.22,1.05,.20,.13,.82,.45],grenade:[.30,.28,.38,.18,.18,.22,.22],barrel:[.42,.20,.50,.24,.08,.32,.24],wall:[.48,.34,.26,.42,.10,.20,.20],rocket:[.46,.26,1.16,.26,.20,.84,.45],railgun:[.30,.18,1.30,.09,.08,1.06,.47]};
 export class VisualFactory {
   constructor(){
     this.cache=new Map();this.geometries=new Set();
-    this.base={box:new THREE.BoxGeometry(1,1,1),bevel:new RoundedBoxGeometry(1,1,1,1,.075),cylinder:new THREE.CylinderGeometry(.5,.5,1,10),sphere:new THREE.IcosahedronGeometry(.5,1),cone:new THREE.ConeGeometry(.5,1,5)};
-    this.lit=new THREE.MeshStandardMaterial({vertexColors:true,roughness:.72,metalness:.12,flatShading:true});
+    this.base={box:new THREE.BoxGeometry(1,1,1),cylinder:new THREE.CylinderGeometry(.5,.5,1,12),sphere:new THREE.IcosahedronGeometry(.5,0),cone:new THREE.ConeGeometry(.5,1,3)};
+    this.lit=new THREE.MeshLambertMaterial({vertexColors:true,flatShading:true});
     this.flat=new THREE.MeshBasicMaterial({vertexColors:true});
-    this.glows=new Map();
+    this.outline=new THREE.MeshBasicMaterial({color:C.outline,side:THREE.BackSide});
+    this.edgeMaterial=new THREE.LineBasicMaterial({color:C.outline});
+    this.edgeBases={};for(const [key,geo] of Object.entries(this.base))this.edgeBases[key]=new THREE.EdgesGeometry(geo,15);
   }
+  // One color mesh and one black hull per moving part; edges are omitted only at ultra quality.
   mesh(parts,lite=false,glow=false){
-    const chunks=[];
+    const chunks=[],hulls=[],lines=[],group=new THREE.Group();
     for(const p of parts){
-      const copy=this.base[p.shape || 'box'].clone(),geo=copy.index?copy.toNonIndexed():copy;
-      if(geo!==copy)copy.dispose();
-      geo.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(p.x,p.y,p.z),new THREE.Quaternion().setFromEuler(new THREE.Euler(p.rx||0,p.ry||0,p.rz||0)),new THREE.Vector3(p.w,p.h,p.d)));
+      const shape=p.shape || 'box',base=this.base[shape];
+      const make=(extra=[0,0,0],edge=false)=>{
+        const geo=(edge?this.edgeBases[shape]:base).clone();
+        geo.applyMatrix4(new THREE.Matrix4().compose(new THREE.Vector3(p.x,p.y,p.z),new THREE.Quaternion().setFromEuler(new THREE.Euler(p.rx||0,p.ry||0,p.rz||0)),new THREE.Vector3(p.w+extra[0],p.h+extra[1],p.d+extra[2])));
+        return geo;
+      };
+      const copied=make(),geo=copied.index?copied.toNonIndexed():copied;if(geo!==copied)copied.dispose();
       const count=geo.attributes.position.count,colors=new Float32Array(count*3),color=new THREE.Color(p.color);
-      for(let i=0;i<count;i++){const shade=lite&&!glow?.79+.21*Math.max(0,geo.attributes.normal.getY(i)):.96;colors[i*3]=color.r*shade;colors[i*3+1]=color.g*shade;colors[i*3+2]=color.b*shade;}
+      for(let i=0;i<count;i++){const shade=lite&&!glow?.88+.12*Math.max(0,geo.attributes.normal.getY(i)):1;colors[i*3]=color.r*shade;colors[i*3+1]=color.g*shade;colors[i*3+2]=color.b*shade;}
       geo.setAttribute('color',new THREE.BufferAttribute(colors,3));chunks.push(geo);
+      if(p.stroke!==false){const extra=p.stroke || [.034,.034,.034];const h=make(extra),outline=h.index?h.toNonIndexed():h;if(outline!==h)h.dispose();hulls.push(outline);if(!lite)lines.push(make([.001,.001,.001],true));}
     }
-    const geometry=mergeGeometries(chunks,false);for(const g of chunks)g.dispose();this.geometries.add(geometry);
-    const mesh=new THREE.Mesh(geometry,lite||glow?this.flat:this.lit);mesh.castShadow=!lite;mesh.receiveShadow=!lite;return mesh;
+    const merge=arr=>{const result=mergeGeometries(arr,false);arr.forEach(g=>g.dispose());this.geometries.add(result);return result;};
+    const mesh=new THREE.Mesh(merge(chunks),lite||glow?this.flat:this.lit);mesh.name='color-fill';mesh.castShadow=!lite;mesh.receiveShadow=!lite;mesh.userData.shadowCast=!lite;mesh.userData.shadowReceive=!lite;group.add(mesh);
+    if(hulls.length){const hull=new THREE.Mesh(merge(hulls),this.outline);hull.name='cartoon-outline';hull.userData.outline=true;group.add(hull);}
+    if(lines.length){const edges=new THREE.LineSegments(merge(lines),this.edgeMaterial);edges.name='cartoon-edges';group.add(edges);}
+    return group;
   }
   group(parent,name,x=0,y=0,z=0){const g=new THREE.Group();g.name=name;g.position.set(x,y,z);parent.add(g);return g;}
+  classicBuilder(){
+    return {geos:Object.fromEntries(Object.keys(D).map(k=>[k,k])),materials:C,
+      addPart:(parent,geo,color,x,y,z,sx=1,sy=1,sz=1,rx=0,ry=0,rz=0)=>{
+        const dims=D[geo],part=new THREE.Group();part.position.set(x,y,z);part.rotation.set(rx,ry,rz);
+        part.userData.classicPart={...b(0,0,0,dims[0]*sx,dims[1]*sy,dims[2]*sz,color,dims[3]||'box'),geo,stroke:dims.slice(0,3).map(v=>v*.045)};parent.add(part);return part;
+      }
+    };
+  }
+  adopt(parent,child){child.position.sub(parent.position);parent.add(child);}
+  compile(group,lite){
+    const parts=[];for(const child of [...group.children]){
+      const p=child.userData.classicPart;
+      if(p){parts.push({...p,x:child.position.x,y:child.position.y,z:child.position.z,rx:child.rotation.x,ry:child.rotation.y,rz:child.rotation.z});group.remove(child);}
+      else this.compile(child,lite);
+    }
+    if(parts.length)group.add(this.mesh(parts,lite));
+  }
   enemy(type='zombie',lite=false){
-    const key=`enemy:${type}:${lite}`;
-    if(!this.cache.has(key))this.cache.set(key,this.buildEnemy(type,lite));
+    const key=`enemy:${type}:${lite}`;if(!this.cache.has(key))this.cache.set(key,this.buildEnemy(type,lite));
     const g=this.cache.get(key).clone(true);g.userData={type,rigged:true,lite};
     for(const name of ['torso','head','leftArm','rightArm','leftElbow','rightElbow','leftLeg','rightLeg','leftKnee','rightKnee','shield','core','warning','castOrb'])g.userData[name]=g.getObjectByName(name);
     return g;
   }
   buildEnemy(type,lite){
-    const g=new THREE.Group(),[suit,under,accent]=ENEMY_COLORS[type] || ENEMY_COLORS.zombie;
-    const heavy=type==='tank',runner=type==='runner',devil=type==='devil',bomber=type==='bomber',shield=type==='shield';
-    const width=heavy?1.04:runner?.59:.76,shoulder=heavy?.68:.48;
-    const torso=this.group(g,'torso',0,.89,0),body=[b(0,0,0,width,.68,.43,suit,'bevel'),b(0,-.29,.015,width+.02,.12,.47,under),b(0,.06,.242,width*.70,.34,.06,under,'bevel')];
-    if(type==='zombie')body.push(b(-.22,.16,.276,.12,.43,.035,accent,'box',0,0,-.2),b(.17,-.07,.282,.24,.09,.028,suit,'box',0,0,.35),b(0,.20,-.26,.38,.35,.17,under));
-    if(runner)body.push(b(0,.22,-.25,.42,.25,.22,under,'bevel'),b(-.24,.01,.275,.08,.56,.05,accent,'box',0,0,-.3),b(.22,.05,.275,.07,.50,.05,accent,'box',0,0,.3));
-    if(heavy){body.push(b(0,.12,.31,1.08,.48,.16,under,'bevel'),b(0,.36,.40,.92,.09,.035,accent),b(0,.12,-.32,.76,.82,.30,under,'bevel'));for(const x of [-.26,0,.26])body.push(b(x,.18,-.51,.09,.60,.05,C.metal));}
-    if(devil){for(const x of [-.25,.25])body.push(b(x,-.38,0,.35,.60,.48,under,'box',0,0,x*.30));body.push(b(0,.22,.26,.34,.18,.1,accent,'bevel'),b(0,.03,.29,.23,.27,.12,under,'bevel'));}
-    if(bomber){for(const x of [-.25,.25])body.push(b(x,.15,-.32,.25,.77,.25,0x829783,'cylinder'),b(x,-.13,.28,.13,.56,.11,accent,'bevel'));body.push(b(0,.15,.31,.31,.22,.09,under,'bevel'),b(0,-.08,.32,.28,.035,.02,C.edge));}
-    if(shield)body.push(b(0,.13,.29,.57,.44,.14,C.navy,'bevel'),b(0,.21,.373,.32,.04,.02,accent),b(0,.1,-.28,.57,.51,.15,under,'bevel'));
-    torso.add(this.mesh(body,lite));
-    const head=this.group(g,'head',0,heavy?1.62:1.59,runner?.10:0);
-    const headParts=[b(0,0,0,.68,.64,.64,suit,'bevel'),b(0,.02,.338,.56,.29,.045,under,'bevel'),b(0,.31,-.02,.72,.13,.70,under,'bevel')];
-    if(devil){headParts.push(b(0,-.15,.36,.32,.12,.07,under));for(const side of [-1,1])headParts.push(b(side*.30,.54,-.08,.14,.65,.16,accent,'cone',0,0,-side*.32),b(side*.38,.28,.02,.17,.30,.3,under,'bevel'));}
-    else {headParts.push(b(0,-.15,.376,heavy?.32:.25,.17,.12,C.dark,'bevel'));for(const side of [-1,1])headParts.push(b(side*.27,-.14,.33,.13,.14,.16,C.metal,'cylinder',Math.PI/2));}
-    if(heavy)headParts.push(b(0,.12,.382,.70,.09,.09,accent),b(0,-.18,.46,.04,.15,.03,C.edge));
-    if(shield)headParts.push(b(0,.08,.381,.58,.04,.015,accent),b(0,.19,.35,.68,.08,.15,under));
-    if(!lite){headParts.push(b(-.13,.33,.08,.05,.035,.45,accent),b(.20,.31,-.2,.11,.04,.13,C.metal));}
-    const eyes=[b(-.14,.04,.366,.10,.035,.025,devil?C.cyan:runner?0xffdf90:0xd4e3b1),b(.14,.04,.366,.10,.035,.025,devil?C.cyan:0xe2b875)];
-    head.add(this.mesh(lite?[...headParts,...eyes]:headParts,lite));if(!lite)head.add(this.mesh(eyes,true,true));
-    for(const side of [-1,1]){
-      const prefix=side<0?'left':'right',arm=this.group(g,prefix+'Arm',side*shoulder,1.20,.035);
-      const upper=[b(0,-.18,0,heavy?.35:.22,.38,heavy?.40:.25,suit,'bevel'),b(0,.02,0,heavy?.48:.30,heavy?.28:.16,heavy?.53:.35,under,'bevel')];
-      if(heavy)upper.push(b(side*.05,.075,.28,.34,.055,.035,accent));
-      if(!lite)arm.add(this.mesh(upper,false));
-      const elbow=this.group(arm,prefix+'Elbow',0,-.37,0);
-      const lower=[b(0,-.16,.01,heavy?.31:.19,.32,heavy?.35:.22,suit,'bevel'),b(0,-.33,.05,heavy?.35:.22,heavy?.23:.16,heavy?.38:.24,under,'bevel')];
-      if(runner||devil){for(let i=0;i<(lite?2:3);i++)lower.push(b(-.07+i*.07,-.43,.13,.025,.17,.06,devil?C.cyan:C.metal,'cone',.18));}
-      if(!lite){lower.push(b(0,-.18,.14,.16,.09,.04,accent));elbow.add(this.mesh(lower,false));}else arm.add(this.mesh([...upper,...lower.map(p=>({...p,y:p.y-.37}))],true));
-      const leg=this.group(g,prefix+'Leg',side*(heavy?.26:.19),.61,0),thigh=[b(0,-.15,0,heavy?.32:.24,.32,heavy?.34:.25,suit,'bevel')];
-      if(heavy||shield)thigh.push(b(0,-.17,.17,.24,.22,.10,under,'bevel'));
-      const knee=this.group(leg,prefix+'Knee',0,-.29,0),shin=[b(0,-.12,.01,heavy?.28:.20,.27,.25,suit,'bevel'),b(0,-.24,.075,heavy?.37:.29,.16,heavy?.48:.38,C.black,'bevel')];
-      if(lite)leg.add(this.mesh([...thigh,...shin.map(p=>({...p,y:p.y-.29}))],true));else{leg.add(this.mesh(thigh,false));knee.add(this.mesh(shin,false));}
+    const builder=this.classicBuilder(),g=buildClassicEnemy.call(builder,type),original=[...g.children];
+    const headY=type==='tank'?1.68:type==='devil'?1.62:1.58;
+    const head=this.group(g,'head',0,headY,0),torso=this.group(g,'torso',0,type==='tank'?.88:type==='devil'||type==='bomber'?.82:.84,0);
+    for(const side of ['left','right']){
+      const arm=g.userData[side+'Arm'];arm.name=side+'Arm';this.group(arm,side+'Elbow',0,-.37,0);
+      const part=g.userData[side+'Leg'],leg=this.group(g,side+'Leg',part.position.x,.56,part.position.z);this.adopt(leg,part);this.group(leg,side+'Knee',0,-.29,0);
     }
-    if(shield){const plate=this.group(g.getObjectByName('leftElbow'),'shield',.37,-.04,.27);const parts=[b(0,0,0,1.03,1.08,.11,C.navy,'bevel'),b(0,.46,.075,1.10,.085,.06,accent),b(0,-.46,.075,1.1,.085,.06,accent),b(0,.19,.066,.51,.17,.025,C.black)];
-      for(const x of [-.5,.5])parts.push(b(x,0,.08,.075,1,.05,C.edge));parts.push(b(0,-.15,.071,.45,.12,.03,C.ivory));plate.add(this.mesh(parts,lite));}
-    if(bomber){const warning=this.group(torso,'warning',0,.18,.377);warning.add(this.mesh([b(0,0,0,.17,.07,.015,0xff5544)],true,true));}
-    if(devil){const core=this.group(torso,'core',0,0,.37);core.add(this.mesh([b(0,0,0,.22,.29,.12,C.cyan,'sphere')],true,true));const orb=this.group(g.getObjectByName('rightElbow'),'castOrb',0,-.45,.10);orb.add(this.mesh([b(0,0,0,.38,.38,.38,C.cyan,'sphere')],true,true));orb.visible=false;}
-    return g;
+    let shield,warning;
+    if(type==='shield')shield=this.group(g,'shield',0,.92,.62);
+    if(type==='bomber')warning=this.group(torso,'warning',0,.16,.595);
+    for(const part of original){
+      const p=part.userData.classicPart;if(!p || part.parent!==g)continue;
+      if(p.geo==='charHead'||p.geo==='hairCap'||p.geo==='horn'||(p.geo==='facePanel'&&part.position.y>1.3)||(type==='devil'&&part.position.y>1.5)){this.adopt(head,part);continue;}
+      if(p.geo==='charShoe'){this.adopt(g.getObjectByName(part.position.x<0?'leftLeg':'rightLeg'),part);continue;}
+      if(shield && [C.shieldPlate,C.shieldEdge].includes(p.color)){this.adopt(shield,part);continue;}
+      if(warning && p.color===C.bomberRed){part.position.sub(torso.position).sub(warning.position);warning.add(part);continue;}
+      this.adopt(torso,part);
+    }
+    const add=(parent,parts)=>parent.add(this.mesh(parts,lite));
+    // Two or three small accents at most; no helmets, respirators, backpacks or new silhouettes.
+    if(['zombie','runner','tank','shield'].includes(type))builder.addPart(head,'lowBox',0xf5fbff,-.09,-.005,type==='tank'?.431:.393,.13,.017,.004).userData.classicPart.stroke=false;
+    if(type==='zombie')builder.addPart(torso,'lowBox',C.zombieStripe,0,-.23,.219,.022,.18,.015);
+    if(type==='runner')for(const side of ['left','right'])builder.addPart(g.getObjectByName(side+'Leg'),'lowBox',C.runnerStripe,0,-.17,.14,.17,.035,.018);
+    if(type==='tank')for(const x of [-.43,.43])builder.addPart(torso,'lowBox',C.weaponMetal,x,.09,.596,.043,.043,.015);
+    if(type==='devil'){
+      const core=this.group(torso,'core',0,.01,.26);add(core,[b(0,0,0,.12,.12,.035,C.casterCore,'box',0,0,Math.PI/4)]);
+      const orb=this.group(g.getObjectByName('rightElbow'),'castOrb',0,-.35,.1);orb.add(this.mesh([b(0,0,0,.3,.3,.3,C.casterCore,'sphere')],true,true));orb.visible=false;
+    }
+    if(shield){
+      for(const x of [-.44,.44])builder.addPart(shield,'lowBox',C.shieldEdge,x,-.31,.069,.035,.035,.014);
+      const arm=g.getObjectByName('leftArm');shield.position.sub(arm.position);arm.add(shield);
+    }
+    this.compile(g,lite);g.userData={};return g;
   }
   weapon(id,lite=false){
     const key=`weapon:${id}:${lite}`;if(!this.cache.has(key))this.cache.set(key,this.buildWeapon(id,lite));
     const g=this.cache.get(key).clone(true);g.userData={id};for(const name of ['magazine','slide','pump','core','muzzle'])g.userData[name]=g.getObjectByName(name);return g;
   }
   buildWeapon(id,lite){
-    const g=new THREE.Group(),metal=C.metal,dark=C.dark,edge=C.edge;
-    const palettes={pistol:0x596569,smg:0x47645b,shotgun:0x72523b,rocket:0x716e48,railgun:0x3d6470};const paint=palettes[id]||C.olive;
-    const parts=[],end={pistol:-.62,smg:-.94,shotgun:-1.16,rocket:-1.12,railgun:-1.20,grenade:-.2,barrel:-.25,wall:-.15}[id] || -.8;
-    const firearm=['pistol','smg','shotgun','railgun','rocket'].includes(id);
-    if(firearm){
-      parts.push(b(0,0,0,id==='pistol'?.19:.28,id==='rocket'?.32:.19,id==='pistol'?.51:.68,paint,'bevel'),b(.015,-.19,.18,.15,.35,.20,dark,'bevel',-.18),b(0,.09,-.10,.21,.035,.45,metal));
-      parts.push(b(0,.01,(end-.24)/2,id==='rocket'?.36:.085,Math.abs(end)-.24,id==='rocket'?.36:.085,metal,'cylinder',Math.PI/2),b(0,.01,end,id==='rocket'?.39:.13,.075,id==='rocket'?.39:.13,dark,'cylinder',Math.PI/2));
-      parts.push(b(-.065,.135,-.04,.034,.07,.07,dark),b(.065,.135,-.04,.034,.07,.07,dark),b(0,.115,end+.13,.045,.08,.06,dark));
-      if(id!=='pistol')parts.push(b(0,-.03,.41,.21,.21,.30,dark,'bevel'),b(0,-.03,.59,.26,.24,.08,edge));
-      if(!lite){for(let i=0;i<4;i++)parts.push(b(.145,.025,-.04-i*.085,.012,.075,.035,dark));parts.push(b(.149,-.018,.17,.015,.045,.11,C.orange),b(-.145,0,.18,.025,.025,.10,edge));}
-      if(id==='pistol'){
-        const slide=this.group(g,'slide');slide.add(this.mesh([b(0,.057,-.065,.22,.15,.58,metal,'bevel'),b(.112,.076,-.02,.006,.07,.13,dark),b(0,.143,-.26,.025,.018,.026,C.orange)],lite));
-      }
-      if(['pistol','smg','railgun'].includes(id)){
-        const mag=this.group(g,'magazine',0,-.23,id==='pistol'?.18:0);mag.add(this.mesh([b(0,-.06,0,.14,id==='pistol'?.20:.32,.19,dark,'bevel'),b(0,-.22,0,.17,.05,.21,metal)],lite));
-      }
-      if(id==='shotgun'){
-        parts.push(b(0,-.095,-.54,.078,.70,.078,dark,'cylinder',Math.PI/2));const pump=this.group(g,'pump',0,-.05,-.52);const grip=[b(0,0,0,.22,.18,.31,paint,'bevel')];for(let i=0;i<4;i++)grip.push(b(0,.08,-.11+i*.065,.23,.045,.025,dark));pump.add(this.mesh(grip,lite));
-      }
-      if(id==='rocket')parts.push(b(-.21,.18,-.4,.09,.17,.23,dark,'bevel'),b(0,.20,-.15,.30,.06,.19,C.orange),b(0,-.17,-.32,.18,.24,.19,dark,'bevel'),b(0,.01,.63,.40,.13,.40,metal,'cylinder',Math.PI/2));
-      if(id==='railgun'){
-        for(const x of [-.17,.17])parts.push(b(x,.06,-.58,.06,.12,.83,dark,'bevel'));
-        const core=this.group(g,'core');const coils=[];for(let i=0;i<4;i++)coils.push(b(0,.08,-.30-i*.17,.29,.075,.035,C.cyan));core.add(this.mesh(coils,true,true));
-      }
-    }else if(id==='grenade'){
-      parts.push(b(0,0,-.15,.28,.40,.28,0x5e7349,'sphere'),b(0,.20,-.15,.14,.13,.14,dark,'cylinder'),b(.08,.18,-.13,.055,.20,.22,metal,'bevel',0,0,.25));for(let i=0;i<3;i++)parts.push(b(0,-.1+i*.1,-.15,.29,.026,.29,dark,'cylinder'));
-    }else if(id==='barrel'){
-      parts.push(b(0,-.04,-.20,.49,.17,.49,dark,'cylinder'),b(0,.065,-.20,.20,.09,.20,C.red,'cylinder'),b(0,.01,-.20,.40,.08,.10,C.orange));
-    }else if(id==='wall'){
-      parts.push(b(0,0,-.15,.46,.41,.08,dark,'bevel'),b(0,.025,-.102,.34,.27,.022,0x235454),b(.15,-.145,-.1,.03,.03,.02,C.cyan),b(0,-.25,-.16,.13,.20,.1,metal));for(let i=0;i<3;i++)parts.push(b(0,-.065+i*.065,-.085,.23,.014,.01,C.cyan));
+    const g=new THREE.Group(),builder=this.classicBuilder(),p=WEAPON_SHAPES[id] || WEAPON_SHAPES.pistol;
+    const body={pistol:C.gunPistol,smg:C.gunSmg,shotgun:C.gunShotgun,grenade:C.gunGrenade,barrel:C.gunMine,wall:C.gunWall,rocket:C.gunRocket,railgun:C.gunRail}[id];
+    const accent=['pistol','shotgun','grenade','wall'].includes(id)?C.gunYellowAccent:['barrel','rocket'].includes(id)?C.gunRedAccent:C.gunAccent;
+    const theme={body,accent,barrel:id==='grenade'?C.gunRedAccent:id==='barrel'?C.mineMetal:id==='wall'?C.fakeWall:id==='railgun'?C.gunAccent:C.weaponMetal};
+    const main=builder.addPart(g,'lowBox',body,0,0,0,p[0],p[1],p[2]);
+    const barrel=builder.addPart(g,'lowBox',theme.barrel,0,.03,-p[6],p[3],p[4],p[5]);
+    const bodyFront=-p[2]/2,barrelFront=-p[6]-p[5]/2;
+    if(['pistol','smg','shotgun','rocket','railgun'].includes(id)){barrel.position.z=(bodyFront+barrelFront)/2;barrel.userData.classicPart.d=bodyFront-barrelFront;}
+    const parts=this.group(g,'details');addClassicWeaponParts.call(builder,parts,{id},theme);
+    const detailParts=[...parts.children];
+    if(id==='grenade'){g.remove(barrel);parts.remove(detailParts[0]);main.position.set(0,.02,-.28);Object.assign(main.userData.classicPart,{w:.30,h:.34,d:.30});}
+    const pivot=(part,name)=>{const group=this.group(parts,name,...part.position);part.position.set(0,0,0);group.add(part);return group;};
+    if(id==='pistol'){
+      const slide=this.group(g,'slide');slide.add(main);if(detailParts[0])slide.add(detailParts[0]);
+      const mag=this.group(parts,'magazine',.03,-.29,.10);mag.userData.restY=-.29;
+      builder.addPart(mag,'lowBox',C.weaponDark,0,0,0,.15,.05,.19);
+      builder.addPart(slide,'lowBox',C.weaponMetal,.144,.035,.07,.012,.04,.09);
     }
-    g.add(this.mesh(parts,lite));this.group(g,'muzzle',0,.01,end-.05);return g;
+    if(id==='smg'){const mag=pivot(detailParts[0],'magazine');mag.userData.restY=mag.position.y;builder.addPart(mag,'lowBox',C.weaponDark,.074,-.035,0,.01,.02,.15);}
+    if(id==='shotgun'){const pump=pivot(detailParts[0],'pump');pump.userData.restZ=pump.position.z;for(const z of [-.14,0,.14])builder.addPart(pump,'lowBox',C.weaponDark,.143,0,z,.008,.065,.02);}
+    if(id==='railgun'){const core=this.group(parts,'core');for(const part of detailParts.filter(p=>p.userData.classicPart.color===C.gunAccent))core.add(part);}
+    if(id==='rocket'){builder.addPart(parts,'lowBox',C.weaponDark,0,.095,-.881,.16,.02,.05);}
+    if(id==='wall'){builder.addPart(parts,'lowBox',C.gunYellowAccent,0,.02,-.297,.20,.026,.012);}
+    if(id==='grenade')builder.addPart(parts,'lowBox',C.weaponDark,0,.285,-.28,.12,.018,.04);
+    if(id==='barrel')builder.addPart(parts,'lowBox',C.gunYellowAccent,0,.158,-.38,.11,.012,.07);
+    this.group(g,'muzzle',0,.03,-p[6]-p[5]/2-.015);
+    this.compile(g,lite);return g;
   }
-  dispose(){for(const g of this.geometries)g.dispose();for(const g of Object.values(this.base))g.dispose();this.lit.dispose();this.flat.dispose();this.cache.clear();}
+  dispose(){for(const g of this.geometries)g.dispose();for(const g of [...Object.values(this.base),...Object.values(this.edgeBases)])g.dispose();this.lit.dispose();this.flat.dispose();this.outline.dispose();this.edgeMaterial.dispose();this.cache.clear();}
 }
 
 export function animateEnemy(e,time=0,warning=false){
@@ -128,7 +154,7 @@ export function animateEnemy(e,time=0,warning=false){
   if(e.type==='runner'){lean=.22+atk*.10;armL=-.30+s*.75*walk-atk*1.4;armR=-.4-s*.72*walk-atk*.55;elbowL=elbowR=-.72;leg=.70*s*walk;bob+=Math.abs(c)*.045*walk;headTilt=-.05;}
   if(e.type==='tank'){lean=.045+atk*.16;armL=-.1+s*.16*walk-atk*2.0;armR=-.1-s*.16*walk-atk*2.0;leg=.22*s*walk;sway=.025*s*walk;bob+=Math.abs(s)*.025*walk;elbowL=elbowR=-atk*.38;}
   if(e.type==='devil'){lean=-.025;armL=-.28-c*.07-cast*1.05;armR=-.28+s*.07-cast*1.55;elbowL=-.34-cast*.45;elbowR=-.32-cast*.30;leg=.16*s*walk;bob=.025+.023*idle;headTilt=.055*idle;if(u.core)u.core.rotation.y=time*.8;if(u.castOrb){u.castOrb.visible=cast>.02;u.castOrb.scale.setScalar(.3+cast*1.2);u.castOrb.rotation.y=time*3;}}
-  if(e.type==='bomber'){lean=.16+(warning?.045:0);armL=-.72+s*.10*walk;armR=-.86-s*.12*walk;elbowL=-.72;elbowR=-.57;leg=.48*s*walk;bob+=Math.abs(c)*.032*walk;sway=(warning?Math.sin(time*22)*.026:0);u.torso.scale.x=1+.025*Math.sin(time*(warning?12:5));if(u.warning)u.warning.scale.setScalar(warning?1.15+.25*Math.sin(time*15):.8);}
+  if(e.type==='bomber'){lean=.16+(warning?.045:0);armL=-.72+s*.10*walk;armR=-.86-s*.12*walk;elbowL=-.72;elbowR=-.57;leg=.48*s*walk;bob+=Math.abs(c)*.032*walk;sway=(warning?Math.sin(time*22)*.026:0);u.torso.scale.x=1+.025*Math.sin(time*(warning?12:5));if(u.warning)u.warning.scale.setScalar(warning?1+.12*Math.sin(time*15):1);}
   if(e.type==='shield'){lean=.05+atk*.14;armL=-.12-atk*.55;armR=-.20-s*.30*walk-atk*1.1;elbowL=-.12;elbowR=-.28;leg=.24*s*walk;sway=-.035;headTilt=.04;if(u.shield)u.shield.rotation.y=.08-atk*.12;}
   root.position.set(e.x,Math.max(-.015,bob),e.z);root.rotation.x=lean-hit*(e.hitLean || .16);root.rotation.z=sway+hit*(e.hitSide || 0)*.10;
   u.head.rotation.set(-lean*.45,.035*idle,headTilt);
@@ -141,7 +167,7 @@ export function animateEnemy(e,time=0,warning=false){
 export function animateWeapon(model,{kick=0,reload=0,time=0}={}){
   const u=model?.userData;if(!u)return;const k=clamp(kick*5,0,1),r=Math.sin(clamp(reload,0,1)*Math.PI);
   if(u.slide)u.slide.position.z=k*.10;
-  if(u.pump)u.pump.position.z=-.52+k*.10;
-  if(u.magazine){u.magazine.position.y=-.23-r*.34;u.magazine.rotation.x=r*.15;}
+  if(u.pump)u.pump.position.z=u.pump.userData.restZ+k*.10;
+  if(u.magazine){u.magazine.position.y=u.magazine.userData.restY-r*.34;u.magazine.rotation.x=r*.15;}
   if(u.core)u.core.scale.y=.85+.15*Math.sin(time*3)+k*.35;
 }
