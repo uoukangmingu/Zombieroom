@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 4;
+export {PROTOCOL_VERSION} from './version.js';
 
 export const CLIENT_TO_SERVER = {
   CREATE_ROOM: 'createRoom',

@@ -11,7 +11,7 @@ const flush=s=>new Promise((resolve,reject)=>s.timeout(2000).emit('latencyPing',
 async function harness(t,settings={}){
  const server=createGameServer({port:0,host:'127.0.0.1',autoTick:false});const a=await server.start(),url=`http://127.0.0.1:${a.port}`;const sockets=[];
  t.after(async()=>{sockets.forEach(s=>s.disconnect());await server.stop()});
- const connect=async(token=randomUUID())=>{const s=io(url,{transports:['websocket'],reconnection:false,auth:{playerToken:token,protocol:5}});s.token=token;s.seq=0;sockets.push(s);await event(s,'connect');return s;};
+ const connect=async(token=randomUUID())=>{const s=io(url,{transports:['websocket'],reconnection:false,auth:{playerToken:token,protocol:6}});s.token=token;s.seq=0;sockets.push(s);await event(s,'connect');return s;};
  const host=await connect(),guest=await connect();let p=event(host,'roomCreated');host.emit('createRoom',{settings});const code=(await p).room.roomCode;
  p=event(guest,'roomJoined');guest.emit('joinRoom',{roomCode:code});await p;const room=server.rooms.get(code);
  const send=async(s,name,p={})=>{s.emit(name,{roomCode:code,seq:++s.seq,...p});await flush(s)};
@@ -154,6 +154,15 @@ test('server handshake identifies the build and rejects incompatible clients',as
  t.after(async()=>{for(const s of clients)s.disconnect();await server.stop();});
  const bad=io(`http://127.0.0.1:${port}`,{transports:['websocket'],reconnection:false,auth:{protocol:4}});clients.push(bad);
  const err=await event(bad,'connect_error');assert.equal(err.data.versionMismatch,true);assert.equal(server.rooms.size,0);
- const good=io(`http://127.0.0.1:${port}`,{transports:['websocket'],reconnection:false,auth:{protocol:5}});clients.push(good);
- const info=await event(good,'serverInfo');assert.equal(info.protocol,5);assert.equal(info.version,'1.2.0');assert.ok(Array.isArray(info.lanUrls));
+ const good=io(`http://127.0.0.1:${port}`,{transports:['websocket'],reconnection:false,auth:{protocol:6}});clients.push(good);
+ const info=await event(good,'serverInfo');assert.equal(info.protocol,6);assert.equal(info.version,'1.3.0');assert.ok(Array.isArray(info.lanUrls));
+});
+
+test('mobile analog movement scales speed, clamps untrusted axes and clears stale input',async t=>{
+ const h=await harness(t),{host,room,send}=h;await h.start();const g=room.game,p=room.players.get(host.id);const guest=room.players.get(h.guest.id);guest.state.x=10;guest.state.z=10;g.spawnTimer=999;g.spawnQueue=1;g.enemies=[];
+ const move=async axes=>{p.state.x=p.state.z=0;p.motion.vx=p.motion.vz=0;await send(host,'playerInput',{axes,keys:{},look:{yaw:0,pitch:0}});h.tick(.1);return Math.hypot(p.state.x,p.state.z);};
+ const half=await move({x:.5,z:0}),full=await move({x:1,z:0});assert.ok(Math.abs(half/full-.5)<.01,`half=${half} full=${full}`);
+ const diagonal=await move({x:500,z:500});assert.ok(Math.abs(diagonal/full-1)<.01);assert.equal(p.input.axes.x,1);
+ await move({x:'bad',z:null});assert.deepEqual(p.input.axes,{x:0,z:0});
+ await move({x:1,z:0});p.input.updatedAt=Date.now()-1000;const x=p.state.x;h.tick(.1);assert.equal(p.state.x,x);assert.equal(p.input.axes,null);
 });

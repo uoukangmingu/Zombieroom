@@ -1,3 +1,6 @@
+import {Narrator,MISSION_LINES} from './narrator.js';
+import {controlIcon,joystickAxis} from './control-icons.js';
+import {VisualFactory,animateEnemy,animateWeapon} from './visuals.js';
 import {approachPoint,personalSteering,personalPace,personalityOf} from '../shared/enemy-behavior.js';
 import {FIRE_RULES,makeFirePatch,strongestFireAt,tickBurning} from '../shared/fire.js';
 import {AudioBus} from './audio.js';
@@ -6,12 +9,14 @@ import {MAPS,MAP_KEYS as SURVIVAL_MAP_KEYS,DIFFICULTY,WEAPON_DEFS,enemyStats as 
 import {getMission,createMissionState,tickMission,missionProgress,missionHint,waveSpawnCount,MISSION_CATALOG} from '../shared/missions.js';
 import * as THREE from 'three';
 
-const GAME_BUILD = '1.2.0';
+const GAME_BUILD = '1.3.0';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
 
 const UI = {
+  narrationToggle:$('narration-toggle'), narrationVolume:$('narration-volume'), narrationVolumeLabel:$('narration-volume-label'), narrationVoice:$('narration-voice'), narrationSubtitles:$('narration-subtitles'), narrationStatus:$('narration-status'), narrationCaption:$('narration-caption'),
+  mobilePreset:$('mobile-preset'), mobileWeaponTray:$('mobile-weapon-tray'), mobileWeaponGrid:$('mobile-weapon-grid'),
   serverAddress:$('server-address'),connectServerBtn:$('connect-server-button'),connectionHelp:$('connection-help'),inviteLink:$('invite-link'),
   loading: $('loading-screen'), loadingStatus: $('loading-status'), loadingBar: $('loading-bar'),
   start: $('start-screen'), pause: $('pause-screen'), over: $('game-over-screen'), 
@@ -159,6 +164,7 @@ class Input {
     this.wheel = 0;
     this.locked = false;
     this.touchMode = false;
+    this.moveAxis = null;
     this.mouseSensitivity = 1;
     this.lookBlockedUntil = 0;
     this.lastMouseEventAt = 0;
@@ -224,6 +230,7 @@ class Input {
     if (blockMs > 0) this.lookBlockedUntil = Math.max(this.lookBlockedUntil, performance.now() + blockMs);
   }
   resetTransient() {
+    this.moveAxis = null;
     this.keys.clear();
     this.discardLook(50);
     this.mouse.down = false;
@@ -312,11 +319,12 @@ class MobileController {
       fireLeft:'좌측 발사 버튼', fire:'우측 발사 버튼', adsFire:'ADS 발사 버튼', aim:'조준 버튼',
       jump:'점프 버튼', sprint:'달리기 잠금 버튼', reload:'재장전 버튼', heal:'회복 버튼', interact:'목표 상호작용 버튼', weapon:'무기 변경 버튼'
     };
-    this.defaultMapping = { fireLeft:'fire', fire:'fire', adsFire:'adsFire', aim:'aim', jump:'jump', sprint:'sprint', reload:'reload', heal:'heal', interact:'interact', weapon:'weapon', pause:'pause' };
+    this.defaultMapping = { fireLeft:'none', fire:'fire', adsFire:'none', aim:'aim', jump:'jump', sprint:'none', reload:'reload', heal:'heal', interact:'interact', weapon:'weapon', pause:'pause' };
     this.defaultPositions = {
-      joystick:{x:14,y:72}, fireLeft:{x:11,y:35}, fire:{x:91,y:64}, adsFire:{x:80,y:53}, aim:{x:79,y:70}, jump:{x:92,y:39},
-      sprint:{x:28,y:53}, reload:{x:89,y:84}, heal:{x:66,y:86}, interact:{x:66,y:65}, weapon:{x:77,y:88}, pause:{x:96,y:10}
+      joystick:{x:14,y:72}, fireLeft:{x:11,y:35}, fire:{x:89,y:64}, adsFire:{x:78,y:45}, aim:{x:77,y:65}, jump:{x:92,y:40},
+      sprint:{x:28,y:53}, reload:{x:91,y:88}, heal:{x:62,y:87}, interact:{x:62,y:64}, weapon:{x:77,y:88}, pause:{x:96,y:11}
     };
+    this.preset = 'thumbs';
     this.mapping = { ...this.defaultMapping };
     this.positions = JSON.parse(JSON.stringify(this.defaultPositions));
     this.sensitivity = 1;
@@ -352,6 +360,7 @@ class MobileController {
   load() {
     try {
       const saved = JSON.parse(localStorage.getItem('bhfps_mobile_controls_v45') || localStorage.getItem('bhfps_mobile_controls_v43') || '{}');
+      this.preset = ['thumbs','claw','left','custom'].includes(saved.preset) ? saved.preset : saved.mapping ? 'custom' : 'thumbs';
       if (saved.mapping && typeof saved.mapping === 'object') {
         for (const control of this.configurableControls) {
           if (this.actions[saved.mapping[control]]) this.mapping[control] = saved.mapping[control];
@@ -369,6 +378,7 @@ class MobileController {
       if (typeof saved.autoSprint === 'boolean') this.autoSprint = saved.autoSprint;
       if (['toggle','hold'].includes(saved.aimMode)) this.aimMode = saved.aimMode;
     } catch (_) {}
+    if(UI.mobilePreset)UI.mobilePreset.value=this.preset;
     if (UI.mobileSensitivity) UI.mobileSensitivity.value = String(Math.round(this.sensitivity * 100));
     if (UI.mobileScale) UI.mobileScale.value = String(Math.round(this.scale * 100));
     if (UI.mobileOpacity) UI.mobileOpacity.value = String(Math.round(this.opacity * 100));
@@ -381,7 +391,7 @@ class MobileController {
   save() {
     try {
       localStorage.setItem('bhfps_mobile_controls_v45', JSON.stringify({
-        mapping: this.mapping,
+        preset:this.preset, mapping: this.mapping,
         positions: this.positions,
         sensitivity: this.sensitivity,
         scale: this.scale,
@@ -393,6 +403,10 @@ class MobileController {
   }
 
   bind() {
+    UI.mobilePreset?.addEventListener('change',()=>this.applyPreset(UI.mobilePreset.value));
+    $('mobile-weapon-close')?.addEventListener('click',()=>this.closeWeaponTray());
+    UI.mobileWeaponTray?.addEventListener('pointerdown',event=>{event.stopPropagation();if(event.target===UI.mobileWeaponTray)this.closeWeaponTray();});
+    UI.mobileWeaponGrid?.addEventListener('click',event=>{const button=event.target.closest('[data-weapon-id]');if(!button || button.disabled)return;this.game.selectWeapon(button.dataset.weaponId);this.closeWeaponTray();this.update(0);});
     UI.mobileSettingsStart?.addEventListener('click', () => this.openSettings('start'));
     UI.mobileSettingsPause?.addEventListener('click', () => this.openSettings('pause'));
     UI.mobileSettingsClose?.addEventListener('click', () => this.closeSettings());
@@ -436,6 +450,7 @@ class MobileController {
       el.addEventListener('pointermove', (event) => this.onControlMove(control, el, event), { passive: false });
       el.addEventListener('pointerup', (event) => this.onControlUp(control, el, event), { passive: false });
       el.addEventListener('pointercancel', (event) => this.onControlUp(control, el, event), { passive: false });
+      el.addEventListener('lostpointercapture',event=>this.onControlUp(control,el,event));
       el.addEventListener('contextmenu', event => event.preventDefault());
     }
 
@@ -468,6 +483,7 @@ class MobileController {
     };
     UI.mobileLookZone?.addEventListener('pointerup', endLook, { passive: false });
     UI.mobileLookZone?.addEventListener('pointercancel', endLook, { passive: false });
+    UI.mobileLookZone?.addEventListener('lostpointercapture',endLook);
 
     window.addEventListener('resize', () => this.updateOrientationState());
     window.addEventListener('orientationchange', () => setTimeout(() => this.updateOrientationState(), 80));
@@ -494,6 +510,7 @@ class MobileController {
       }
       select.value = this.mapping[control];
       select.addEventListener('change', () => {
+        this.preset='custom';if(UI.mobilePreset)UI.mobilePreset.value='custom';
         this.mapping[control] = this.actions[select.value] ? select.value : this.defaultMapping[control];
         this.updateButtonLabels();
         this.save();
@@ -510,7 +527,11 @@ class MobileController {
     for (const [control, el] of this.controls) {
       if (control === 'joystick') continue;
       const action = control === 'pause' ? 'pause' : (this.mapping[control] || control);
-      el.textContent = this.actionLabel(action);
+      el.dataset.action=action;
+      el.innerHTML=controlIcon(action)+`<span class="control-label">${action==='weapon'?'무기':action==='pause'?'정지':this.actionLabel(action)}</span><small class="control-meta"></small>`;
+      el.setAttribute('aria-label',action==='pause'?'일시정지':this.actionLabel(action));
+      el.setAttribute('aria-pressed',String((action==='aim'&&this.aimLocked)||(action==='sprint'&&this.sprintLocked)));
+      el.hidden=action==='none'&&!this.layoutEditing;
       for (const name of visualActions) el.classList.remove(`action-${name}`);
       if (visualActions.includes(action)) el.classList.add(`action-${action}`);
       el.classList.toggle('locked', (action === 'aim' && this.aimLocked) || (action === 'sprint' && this.sprintLocked));
@@ -532,6 +553,8 @@ class MobileController {
     for (const [control, el] of this.controls) {
       const pos = this.positions[control] || this.defaultPositions[control];
       if (!pos) continue;
+      el.style.setProperty('--control-half-x',`${Math.max(22,el.offsetWidth/2)}px`);
+      el.style.setProperty('--control-half-y',`${Math.max(22,el.offsetHeight/2)+(control==='joystick'?12:0)}px`);
       el.style.setProperty('--mobile-x', `${pos.x}%`);
       el.style.setProperty('--mobile-y', `${pos.y}%`);
     }
@@ -556,13 +579,13 @@ class MobileController {
 
   beginLayoutEdit() {
     this.releaseAll();
-    this.layoutEditing = true;
+    this.layoutEditing = true;this.updateButtonLabels();
     UI.mobileSettings?.classList.remove('show');
     document.body.classList.add('mobile-layout-edit');
   }
 
   endLayoutEdit() {
-    this.layoutEditing = false;
+    this.layoutEditing = false;this.updateButtonLabels();
     this.dragPointer = null;
     document.body.classList.remove('mobile-layout-edit');
     this.save();
@@ -570,6 +593,7 @@ class MobileController {
   }
 
   resetDefaults() {
+    this.preset='thumbs';if(UI.mobilePreset)UI.mobilePreset.value=this.preset;
     this.mapping = { ...this.defaultMapping };
     this.positions = JSON.parse(JSON.stringify(this.defaultPositions));
     this.sensitivity = 1;
@@ -605,6 +629,7 @@ class MobileController {
     }
     if (!document.body.classList.contains('mobile-playing')) return;
     if (control === 'joystick') {
+      if(this.joystickPointer!==null)return;
       this.joystickPointer = event.pointerId;
       this.updateJoystick(event.clientX, event.clientY);
       return;
@@ -659,8 +684,40 @@ class MobileController {
   }
 
   update(dt) {
-    // 연속 자동 회전은 사용하지 않는다.
-    // pointermove에서 들어온 실제 드래그 입력만 카메라에 반영한다.
+    if(!this.enabled || !this.game.running)return;
+    this.statusTime=(this.statusTime || 0)-dt;if(dt && this.statusTime>0)return;this.statusTime=.12;
+    const g=this.game,w=g.getWeapon(),ammo=g.ammo?.[w?.id];
+    for(const el of this.controls.values()){
+      const action=el.dataset.action,meta=el.querySelector('.control-meta'),label=el.querySelector('.control-label');if(!meta)continue;
+      if(action==='weapon'){label.textContent=w?.name || '무기';meta.textContent=(w?.magSize?`${g.mag?.[w.id] || 0} / `:'')+(Number.isFinite(ammo)?String(ammo):'∞');el.setAttribute('aria-label',`${w?.name || '무기'} · 무기 선택`);}
+      if(action==='reload'){meta.textContent=g.reload?.active?'장전 중':'';el.classList.toggle('reloading',!!g.reload?.active);el.style.setProperty('--reload-progress',`${g.reload?.active?Math.round(100*(1-g.reload.timer/g.reload.duration)):0}%`);}
+      if(action==='heal')meta.textContent=g.downed?'지원 대기':String(Math.ceil(g.medkits || 0));
+      if(action==='interact')label.textContent=g.prepPhase?'준비 완료':'목표';
+    }
+  }
+
+  applyPreset(name){
+    if(name==='custom')return;
+    this.releaseAll();this.preset=name;this.mapping={...this.defaultMapping};this.positions=JSON.parse(JSON.stringify(this.defaultPositions));
+    if(name==='claw'){this.mapping.fireLeft='fire';this.mapping.adsFire='adsFire';this.mapping.sprint='sprint';}
+    if(name==='left')for(const pos of Object.values(this.positions))pos.x=100-pos.x;
+    if(UI.mobilePreset)UI.mobilePreset.value=name;
+    this.renderKeySettings();this.applyPositions();this.updateButtonLabels();this.save();
+  }
+  openWeaponTray(){
+    this.releaseAll();this.renderWeaponTray();if(UI.mobileWeaponTray)UI.mobileWeaponTray.hidden=false;this.game.net.sendInput(true);
+  }
+  closeWeaponTray(){if(UI.mobileWeaponTray)UI.mobileWeaponTray.hidden=true;}
+  renderWeaponTray(){
+    if(!UI.mobileWeaponGrid || !this.enabled)return;
+    const g=this.game;UI.mobileWeaponGrid.innerHTML='';
+    for(const w of WEAPON_DEFS){
+      const button=document.createElement('button'),unlocked=g.unlocked?.has(w.id),ammo=g.ammo?.[w.id];
+      button.type='button';button.dataset.weaponId=w.id;button.disabled=!unlocked;button.className=w.id===g.selectedWeapon?'selected':'';
+      button.setAttribute('aria-pressed',String(w.id===g.selectedWeapon));button.setAttribute('aria-label',`${w.name}, ${unlocked?'선택 가능':`레벨 ${w.unlockWave} 해금`}`);
+      button.innerHTML=controlIcon(w.id)+`<b>${w.name}</b><small>${unlocked?((w.magSize?`${g.mag?.[w.id] || 0} / `:'')+(Number.isFinite(ammo)?ammo:'∞')):'LV '+w.unlockWave}</small>`;
+      UI.mobileWeaponGrid.appendChild(button);
+    }
   }
 
   onControlUp(control, el, event) {
@@ -686,6 +743,7 @@ class MobileController {
   updateDraggedPosition(control, clientX, clientY) {
     const x = clamp(clientX / Math.max(1, window.innerWidth) * 100, 4, 96);
     const y = clamp(clientY / Math.max(1, window.innerHeight) * 100, 7, 93);
+    this.preset='custom';if(UI.mobilePreset)UI.mobilePreset.value='custom';
     this.positions[control] = { x, y };
     this.applyPositions();
   }
@@ -701,6 +759,7 @@ class MobileController {
     const length = Math.hypot(dx, dy) || 1;
     if (length > max) { dx = dx / length * max; dy = dy / length * max; }
     knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+    this.input.moveAxis=joystickAxis(dx,dy,max);
     const nx = dx / max, ny = dy / max;
     const threshold = .17;
     this.input.setVirtualAction('forward', ny < -threshold);
@@ -717,6 +776,7 @@ class MobileController {
   }
 
   clearJoystick() {
+    this.input.moveAxis=null;
     for (const action of ['forward','backward','left','right']) this.input.setVirtualAction(action, false);
     this.joystickSprint = false;
     this.refreshCompositeActions();
@@ -727,7 +787,7 @@ class MobileController {
 
   setAction(action, active, firstDown = false) {
     if (['fire','adsFire','aim','jump','sprint','reload','heal','interact'].includes(action)) this.refreshCompositeActions();
-    else if (action === 'weapon' && active && firstDown) this.input.cycleVirtualWeapon(1);
+    else if (action === 'weapon' && active && firstDown) this.openWeaponTray();
     else if (action === 'pause' && active && firstDown) this.game.pause();
   }
 
@@ -745,6 +805,7 @@ class MobileController {
   }
 
   releaseAll() {
+    this.closeWeaponTray();this.joystickPointer=null;
     this.clearJoystick();
     this.aimLocked = false;
     this.sprintLocked = false;
@@ -785,7 +846,7 @@ class MobileController {
   updateOrientationState() {
     if (!this.enabled) return;
     document.body.classList.toggle('mobile-portrait', window.innerHeight > window.innerWidth);
-    this.game?.resize?.();
+    this.releaseAll();this.applyPositions();this.game?.resize?.();
   }
 }
 
@@ -862,6 +923,11 @@ class Game {
     this.controlsSettingsReturn = 'start';
     this.loadInputPreferences();
     this.audio = new AudioBus();
+    this.narrator=new Narrator({
+      onCaption:text=>{if(UI.narrationCaption){UI.narrationCaption.textContent=text;UI.narrationCaption.hidden=!text;}},
+      onStatus:(message,voices)=>{if(UI.narrationStatus)UI.narrationStatus.textContent=message;const select=UI.narrationVoice;if(!select)return;const stamp=voices.map(v=>v.voiceURI).join('|');if(select.dataset.voices===stamp)return;select.dataset.voices=stamp;select.innerHTML='<option value="">자동 선택 · 한국어</option>';for(const voice of voices){const option=document.createElement('option');option.value=voice.voiceURI;option.textContent=voice.name;select.appendChild(option);}select.value=this.narrator?.voiceURI || '';},
+      onSpeaking:active=>{if(active)this.audio.duckMusic(.42,3.5,.3);}
+    });
         this.net = new NetAdapter(this, UI);
     this.clock = new THREE.Clock();
     this.tmpV = new THREE.Vector3();
@@ -1244,6 +1310,7 @@ class Game {
   }
 
   returnToMainMenu() {
+    this.narrator.reset();
     if(this.lobby.mode==='coop'){this.net.leaveRoom();this.resetLobby();}
     this.resetToMainMenuState();this.setConnectionBlocked(false);
     try{document.fullscreenElement && document.exitFullscreen?.()?.catch?.(()=>{});}catch{}
@@ -1276,14 +1343,17 @@ class Game {
   }
 
   bindUI() {
-    const unlockAudio = () => {
+    const unlockAudio = (event) => {
+      if(event?.isTrusted)this.narrator.unlock();
       if(this.audio.enabled && this.audio.ctx?.state==='running')return;
       this.audio.unlock().then(ok=>{if(ok && this.running){this.audio.startAmbience();this.audio.startBgm();}});
     };
     document.addEventListener('pointerdown',unlockAudio,{capture:true,passive:true});
     document.addEventListener('keydown',unlockAudio,{capture:true});
-    document.addEventListener('visibilitychange',()=>{this.audio.setHidden(document.hidden);if(!document.hidden&&this.audio.ctx)unlockAudio();});
+    document.addEventListener('visibilitychange',()=>{this.audio.setHidden(document.hidden);this.narrator.setHidden(document.hidden);if(!document.hidden&&this.audio.ctx)unlockAudio();});
     this.audio.onStatus=()=>this.updateSoundStatus();
+    for(const el of [UI.narrationToggle,UI.narrationVolume,UI.narrationVoice,UI.narrationSubtitles])el?.addEventListener(el.type==='range'?'input':'change',()=>{this.syncSettingsFromMenu();this.savePreferences();});
+    $('narration-test')?.addEventListener('click',()=>{this.narrator.unlock();this.narrator.stop();this.narrator.say('preview','통신 연결 확인. 생존자 여러분, 구역을 확보하세요.',{force:true,priority:5});});
     for(const id of ['sound-settings-start','sound-settings-pause'])$(id)?.addEventListener('click',()=>this.openSoundSettings());
     $('sound-settings-close')?.addEventListener('click',()=>this.closeSoundSettings());
     $('sound-test')?.addEventListener('click',async()=>{if(await this.audio.unlock()){this.audio.test();this.updateSoundStatus('왼쪽 → 오른쪽 → 발사 → 금속 타격 순서입니다.');}});
@@ -1522,6 +1592,10 @@ class Game {
       if (UI.bgmVolume && Number.isFinite(saved.bgm)) UI.bgmVolume.value = String(clamp(saved.bgm, 0, 100));
       if(UI.ambienceVolume && Number.isFinite(saved.ambience ?? saved.bgm))UI.ambienceVolume.value=String(clamp(saved.ambience ?? saved.bgm,0,100));
       if(UI.soundMix && ['balanced','headphones','night'].includes(saved.soundMix))UI.soundMix.value=saved.soundMix;
+      if(UI.narrationToggle)UI.narrationToggle.value=saved.narration===false?'off':'on';
+      if(UI.narrationSubtitles)UI.narrationSubtitles.value=saved.narrationSubtitles===false?'off':'on';
+      if(UI.narrationVolume && Number.isFinite(saved.narrationVolume))UI.narrationVolume.value=String(clamp(saved.narrationVolume,0,100));
+      if(saved.narrationVoice){this.narrator.voiceURI=String(saved.narrationVoice);if([...UI.narrationVoice.options].some(o=>o.value===saved.narrationVoice))UI.narrationVoice.value=saved.narrationVoice;}
       this.accessibility.fov = clamp(Number(saved.fov) || this.accessibility.fov || 72, 60, 100);
       this.accessibility.cameraMotion = ['full','reduced','off'].includes(saved.cameraMotion) ? saved.cameraMotion : this.accessibility.cameraMotion;
       this.accessibility.flicker = typeof saved.flicker === 'boolean' ? saved.flicker : this.accessibility.flicker;
@@ -1532,6 +1606,7 @@ class Game {
   savePreferences() {
     try {
       localStorage.setItem('bhfps_settings_v37', JSON.stringify({
+        narration:UI.narrationToggle?.value!=='off',narrationSubtitles:UI.narrationSubtitles?.value!=='off',narrationVolume:Number(UI.narrationVolume?.value ?? 85),narrationVoice:this.narrator.voiceURI,
         quality: UI.quality?.value || 'auto',
         master: Number(UI.masterVolume?.value ?? 100),
         sfx: Number(UI.sfxVolume?.value ?? 100),
@@ -1553,6 +1628,8 @@ class Game {
       ambience:(Number(UI.ambienceVolume?.value ?? 60) || 0)/100
     });
     this.audio.setMix(UI.soundMix?.value || 'balanced');
+    this.narrator.configure({enabled:UI.narrationToggle?.value!=='off',subtitles:UI.narrationSubtitles?.value!=='off',volume:Number(UI.narrationVolume?.value ?? 85)/100,master:this.audio.volumes.master,voiceURI:UI.narrationVoice?.value || ''});
+    if(UI.narrationVolumeLabel)UI.narrationVolumeLabel.textContent=`${UI.narrationVolume.value}%`;
   }
 
   refreshVolumeLabels() {
@@ -1694,6 +1771,7 @@ class Game {
       mesh.position.set(e.x, 0, e.z);
       mesh.rotation.y = old?.rotation?.y || 0;
       if (old?.parent) old.parent.remove(old);
+      if(e.elite)mesh.scale.setScalar(1.18);
       this.scene.add(mesh);
       e.mesh = mesh;
     }
@@ -1786,7 +1864,7 @@ class Game {
     this.suppressAutoPauseUntil = now() + .75;
     this.clearRunState(true);
     this.input.resetTransient();
-    this.audio.stopAll();this.audio.setBedPaused(false);this.audio.unlock();
+    this.narrator.reset();this.audio.stopAll();this.audio.setBedPaused(false);this.audio.unlock();
     this.syncSettingsFromMenu();
     this.applyRuntimeQuality();
     this.resize();
@@ -1828,7 +1906,7 @@ class Game {
 
   pause() {
     if (!this.running || this.gameOver || this.paused) return;
-    this.paused = true;this.input.resetTransient();this.net.sendInput(true);
+    this.paused = true;this.narrator.stop();this.input.resetTransient();this.net.sendInput(true);
     if (UI.pauseQuality && UI.quality) UI.pauseQuality.value = UI.quality.value;
     this.syncSettingsFromMenu();
     try { if (document.pointerLockElement === canvas) document.exitPointerLock?.(); } catch (_) {}
@@ -2376,11 +2454,8 @@ class Game {
   }
 
   createBoxheadModel(type) {
-    if (this.quality?.simpleModels && type !== 'player') return this.createUltraEnemyModel(type);
-    const g = new THREE.Group();
-    g.userData.type = type;
-
-    if (type === 'player') {
+    if(type!=='player'){this.modelKit ||= new VisualFactory();return this.modelKit.enemy(type,!!this.quality?.simpleModels);}
+    const g=new THREE.Group();g.userData.type=type;
       // 업로드1 기준 플레이어: 살구색 얼굴, 검은 민소매 몸통, 블록형 팔다리.
       this.addPart(g, this.geos.charTorso, this.materials.shirtBlack, 0, .84, 0, .95, 1.12, .92);
       this.addPart(g, this.geos.charHead, this.materials.skin, 0, 1.58, 0, .98, .98, .98);
@@ -2391,154 +2466,10 @@ class Game {
       this.addPart(g, this.geos.charLeg, this.materials.skin, -.20, .28, .02, .96, 1, .96);
       this.addPart(g, this.geos.charLeg, this.materials.skin, .20, .28, .02, .96, 1, .96);
       this.addPart(g, this.geos.lowBox, this.materials.weaponDark, -.73, .54, .22, .18, .56, .14, 0, 0, .04);
-    } else if (type === 'devil') {
-      // 균열술사: 오염된 보라색 방호복과 청록 균열광. 원거리 역할이 한눈에 보인다.
-      this.addPart(g, this.geos.charTorso, this.materials.devilRed, 0, .82, 0, 1.12, 1.08, 1.08);
-      this.addPart(g, this.geos.charHead, this.materials.devilRed, 0, 1.62, 0, 1.03, 1.03, 1.03);
-      this.addPart(g, this.geos.facePanel, this.materials.devilDark, 0, 1.65, .375, .72, .26, 1);
-      this.addPart(g, this.geos.lowBox, this.materials.devilEye, -.18, 1.68, .392, .13, .055, .025);
-      this.addPart(g, this.geos.lowBox, this.materials.devilEye, .18, 1.68, .392, .13, .055, .025);
-      this.addPart(g, this.geos.lowBox, this.materials.devilDark, 0, .98, .56, .72, .10, .055);
-      this.addPart(g, this.geos.horn, this.materials.casterCore, -.42, 2.03, .01, 1, 1.05, 1, 0, 0, -.45);
-      this.addPart(g, this.geos.horn, this.materials.casterCore, .42, 2.03, .01, 1, 1.05, 1, 0, 0, .45);
-      // 팔은 한 벌만 생성한다. 이전 버전은 고정 팔 + 애니메이션 팔이 겹쳐 보여서
-      // 걷는 중 몸이 두 개 겹친 것처럼 보였다.
-      const castLeft = new THREE.Group();
-      castLeft.position.set(-.62, 1.03, .16);
-      this.addPart(castLeft, this.geos.charArm, this.materials.devilRed, 0, -.22, 0, .88, .90, .88);
-      const castRight = new THREE.Group();
-      castRight.position.set(.62, 1.03, .16);
-      this.addPart(castRight, this.geos.charArm, this.materials.devilRed, 0, -.22, 0, .88, .90, .88);
-      g.add(castLeft); g.add(castRight);
-      g.userData.leftArm = castLeft; g.userData.rightArm = castRight;
-      const leftLeg = this.addPart(g, this.geos.charLeg, this.materials.devilRed, -.22, .28, .02, 1.1, 1.03, 1.1);
-      const rightLeg = this.addPart(g, this.geos.charLeg, this.materials.devilRed, .22, .28, .02, 1.1, 1.03, 1.1);
-      g.userData.leftLeg = leftLeg; g.userData.rightLeg = rightLeg;
-    } else if (type === 'tank') {
-      // 탱커 좀비: 크고 둔한 체력형. 회색 중장갑 + 노란 경고띠로 일반 좀비와 확실히 구분한다.
-      this.addPart(g, this.geos.charTorso, this.materials.tankSuit, 0, .88, 0, 1.34, 1.26, 1.12);
-      this.addPart(g, this.geos.lowBox, this.materials.tankArmor, 0, .98, .54, 1.08, .74, .09);
-      this.addPart(g, this.geos.lowBox, this.materials.tankStripe, 0, 1.22, .602, .88, .10, .045);
-      this.addPart(g, this.geos.charHead, this.materials.tankSuit, 0, 1.68, 0, 1.10, 1.10, 1.10);
-      this.addPart(g, this.geos.facePanel, this.materials.iceBlue, 0, 1.66, .414, .84, .58, 1);
-      this.addPart(g, this.geos.lowBox, this.materials.tankArmor, -.68, 1.20, .03, .34, .32, .64);
-      this.addPart(g, this.geos.lowBox, this.materials.tankArmor, .68, 1.20, .03, .34, .32, .64);
-      const left = new THREE.Group(); left.position.set(-.76, .99, .17);
-      const right = new THREE.Group(); right.position.set(.76, .99, .17);
-      this.addPart(left, this.geos.charArm, this.materials.tankSuit, 0, -.22, 0, .96, 1.05, .96);
-      this.addPart(right, this.geos.charArm, this.materials.tankSuit, 0, -.22, 0, .96, 1.05, .96);
-      this.addPart(left, this.geos.charShoe, this.materials.tankArmor, 0, -.72, .04, .62, .80, .58);
-      this.addPart(right, this.geos.charShoe, this.materials.tankArmor, 0, -.72, .04, .62, .80, .58);
-      g.add(left); g.add(right); g.userData.leftArm = left; g.userData.rightArm = right;
-      const leftLeg = this.addPart(g, this.geos.charLeg, this.materials.tankSuit, -.28, .28, .02, 1.18, 1.05, 1.18);
-      const rightLeg = this.addPart(g, this.geos.charLeg, this.materials.tankSuit, .28, .28, .02, 1.18, 1.05, 1.18);
-      g.userData.leftLeg = leftLeg; g.userData.rightLeg = rightLeg;
-    } else if (type === 'bomber') {
-      // 폭발 좀비: 노랑/주황 경고색 + 빨간 폭발 코어. 멀리서도 우선 처치 대상으로 보이게 한다.
-      this.addPart(g, this.geos.charTorso, this.materials.bomberSuit, 0, .82, 0, .94, 1.08, .94);
-      this.addPart(g, this.geos.lowBox, this.materials.bomberVest, 0, .95, .525, .78, .72, .08);
-      this.addPart(g, this.geos.lowBox, this.materials.bomberRed, 0, .98, .595, .28, .34, .06);
-      this.addPart(g, this.geos.lowBox, this.materials.tankStripe, -.30, 1.22, .58, .10, .52, .05, 0, 0, .55);
-      this.addPart(g, this.geos.lowBox, this.materials.tankStripe, .30, 1.22, .58, .10, .52, .05, 0, 0, -.55);
-      this.addPart(g, this.geos.charHead, this.materials.bomberSuit, 0, 1.58, 0, .96, .96, .96);
-      this.addPart(g, this.geos.facePanel, this.materials.runnerFace, 0, 1.55, .370, .82, .60, 1);
-      const left = new THREE.Group(); left.position.set(-.55, .96, .16);
-      const right = new THREE.Group(); right.position.set(.55, .96, .16);
-      this.addPart(left, this.geos.charArm, this.materials.bomberSuit, 0, -.22, 0, .72, .90, .72);
-      this.addPart(right, this.geos.charArm, this.materials.bomberSuit, 0, -.22, 0, .72, .90, .72);
-      this.addPart(left, this.geos.charShoe, this.materials.bomberRed, 0, -.65, .04, .45, .62, .48);
-      this.addPart(right, this.geos.charShoe, this.materials.bomberRed, 0, -.65, .04, .45, .62, .48);
-      g.add(left); g.add(right); g.userData.leftArm = left; g.userData.rightArm = right;
-      const leftLeg = this.addPart(g, this.geos.charLeg, this.materials.bomberSuit, -.20, .28, .02, .96, 1, .96);
-      const rightLeg = this.addPart(g, this.geos.charLeg, this.materials.bomberSuit, .20, .28, .02, .96, 1, .96);
-      g.userData.leftLeg = leftLeg; g.userData.rightLeg = rightLeg;
-    } else if (type === 'shield') {
-      // 실드 좀비: 정면 장갑판. 정면 사격은 약해지고, 측면/헤드샷/폭발물로 처리하도록 만든다.
-      this.addPart(g, this.geos.charTorso, this.materials.shieldSuit, 0, .84, 0, 1.00, 1.12, .98);
-      this.addPart(g, this.geos.charHead, this.materials.shieldSuit, 0, 1.58, 0, .98, .98, .98);
-      this.addPart(g, this.geos.facePanel, this.materials.iceBlue, 0, 1.55, .375, .90, .72, 1);
-      this.addPart(g, this.geos.lowBox, this.materials.shieldPlate, 0, .92, .62, 1.08, .96, .12);
-      this.addPart(g, this.geos.lowBox, this.materials.shieldEdge, 0, 1.43, .69, 1.16, .08, .05);
-      this.addPart(g, this.geos.lowBox, this.materials.shieldEdge, -.58, .92, .69, .08, .98, .05);
-      this.addPart(g, this.geos.lowBox, this.materials.shieldEdge, .58, .92, .69, .08, .98, .05);
-      const left = new THREE.Group(); left.position.set(-.62, .98, .10);
-      const right = new THREE.Group(); right.position.set(.62, .98, .10);
-      this.addPart(left, this.geos.charArm, this.materials.shieldSuit, 0, -.22, 0, .72, .92, .72);
-      this.addPart(right, this.geos.charArm, this.materials.shieldSuit, 0, -.22, 0, .72, .92, .72);
-      this.addPart(left, this.geos.charShoe, this.materials.gloveBlue, 0, -.66, .04, .48, .72, .50);
-      this.addPart(right, this.geos.charShoe, this.materials.gloveBlue, 0, -.66, .04, .48, .72, .50);
-      g.add(left); g.add(right); g.userData.leftArm = left; g.userData.rightArm = right;
-      const leftLeg = this.addPart(g, this.geos.charLeg, this.materials.shieldSuit, -.20, .28, .02, .96, 1, .96);
-      const rightLeg = this.addPart(g, this.geos.charLeg, this.materials.shieldSuit, .20, .28, .02, .96, 1, .96);
-      g.userData.leftLeg = leftLeg; g.userData.rightLeg = rightLeg;
-    } else {
-      // 업로드 이미지 기준 좀비: 흰색 수트/방호복 + 푸른 얼굴 패널 + 검은 신발.
-      // runner는 같은 계열이지만 살짝 더 푸른 톤과 좁은 몸으로 속도감을 준다.
-      const isRunner = type === 'runner';
-      const suit = isRunner ? this.materials.runnerSuit : this.materials.zombieSuit;
-      const stripe = isRunner ? this.materials.runnerStripe : this.materials.zombieStripe;
-      const face = isRunner ? this.materials.runnerFace : this.materials.iceBlue;
-      const sx = isRunner ? .82 : 1.04;
-      const sy = isRunner ? 1.22 : 1.10;
-      this.addPart(g, this.geos.charTorso, suit, 0, .84, 0, sx, sy, .98);
-      // 일반 좀비는 주황 경고띠, 러너는 청록색 수트+흰 띠로 멀리서도 구분되게 한다.
-      this.addPart(g, this.geos.lowBox, stripe, 0, 1.12, .525, sx * .62, .11, .055);
-      this.addPart(g, this.geos.lowBox, stripe, 0, .74, .526, sx * .46, .09, .055, 0, 0, isRunner ? 0 : .42);
-      this.addPart(g, this.geos.facePanel, face, 0, 1.01, .238, .82, .42, 1);
-      this.addPart(g, this.geos.charHead, suit, 0, 1.58, 0, .98, .98, .98);
-      this.addPart(g, this.geos.facePanel, face, 0, 1.55, .375, .90, .76, 1);
-      this.addPart(g, this.geos.hairCap, isRunner ? this.materials.runnerFace : this.materials.hair, 0, 1.98, 0, 1.0, .72, 1.0);
-      // 팔은 punchLeft/punchRight 그룹만 사용한다. 고정 팔을 별도로 만들지 않아
-      // 정지한 팔과 움직이는 팔이 동시에 겹쳐 보이는 문제를 제거했다.
-      const punchLeft = new THREE.Group();
-      punchLeft.position.set(-.56, .98, .16);
-      this.addPart(punchLeft, this.geos.charArm, suit, 0, -.22, 0, .72, .92, .72);
-      const punchRight = new THREE.Group();
-      punchRight.position.set(.56, .98, .16);
-      this.addPart(punchRight, this.geos.charArm, suit, 0, -.22, 0, .72, .92, .72);
-      g.add(punchLeft); g.add(punchRight);
-      g.userData.leftArm = punchLeft; g.userData.rightArm = punchRight;
-      // 손은 몸통에 고정하지 않고 팔 그룹의 하단에 붙인다.
-      // 이렇게 해야 걷기/공격 애니메이션 때 손이 팔과 함께 움직인다.
-      this.addPart(punchLeft, this.geos.charShoe, isRunner ? this.materials.runnerStripe : this.materials.gloveBlue, 0, -.66, .04, .48, .72, .50);
-      this.addPart(punchRight, this.geos.charShoe, isRunner ? this.materials.runnerStripe : this.materials.gloveBlue, 0, -.66, .04, .48, .72, .50);
-      const leftLeg = this.addPart(g, this.geos.charLeg, suit, -.20, .28, .02, .96, 1, .96);
-      const rightLeg = this.addPart(g, this.geos.charLeg, suit, .20, .28, .02, .96, 1, .96);
-      g.userData.leftLeg = leftLeg; g.userData.rightLeg = rightLeg;
-    }
 
-    this.addPart(g, this.geos.charShoe, this.materials.shoeBlack, -.23, .04, .10, 1.05, 1, 1.12);
-    this.addPart(g, this.geos.charShoe, this.materials.shoeBlack, .23, .04, .10, 1.05, 1, 1.12);
+    this.addPart(g,this.geos.charShoe,this.materials.shoeBlack,-.23,.04,.10,1.05,1,1.12);
+    this.addPart(g,this.geos.charShoe,this.materials.shoeBlack,.23,.04,.10,1.05,1,1.12);
     return g;
-  }
-
-  createUltraEnemyModel(type = 'zombie') {
-    if (!this.ultraEnemyGeometries) this.ultraEnemyGeometries = new Map();
-    if (!this.ultraEnemyMaterials) {
-      this.ultraEnemyMaterials = {
-        zombie: new THREE.MeshBasicMaterial({ color: 0xd8d3bc }),
-        runner: new THREE.MeshBasicMaterial({ color: 0x24b9d8 }),
-        devil: new THREE.MeshBasicMaterial({ color: COLORS.devil }),
-        tank: new THREE.MeshBasicMaterial({ color: 0x565e69 }),
-        bomber: new THREE.MeshBasicMaterial({ color: 0xf0a229 }),
-        shield: new THREE.MeshBasicMaterial({ color: 0x8dbbdc })
-      };
-    }
-    const dims = {
-      zombie: [.82, 1.78, .66], runner: [.66, 1.70, .58], devil: [.90, 1.92, .74],
-      tank: [1.12, 2.05, .88], bomber: [.78, 1.72, .64], shield: [.96, 1.84, .74]
-    }[type] || [.82, 1.78, .66];
-    if (!this.ultraEnemyGeometries.has(type)) {
-      const geo = new THREE.BoxGeometry(dims[0], dims[1], dims[2], 1, 1, 1);
-      geo.translate(0, dims[1] / 2, 0);
-      this.ultraEnemyGeometries.set(type, geo);
-    }
-    const mesh = new THREE.Mesh(this.ultraEnemyGeometries.get(type), this.ultraEnemyMaterials[type] || this.ultraEnemyMaterials.zombie);
-    mesh.userData.type = type;
-    mesh.userData.ultraSimple = true;
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-    return mesh;
   }
 
   createRemotePlayerModel(role = 'ally') {
@@ -2735,7 +2666,7 @@ class Game {
       if(UI.rewardExtract){UI.rewardExtract.hidden=g.wave%10!==0;UI.reward?.classList.toggle('can-extract',g.wave%10===0);UI.rewardExtract.textContent=this.serverExtractRequested?'친구의 탈출 동의 대기':'두 사람 탈출하기';}
       if(chosen && this.rewardOpen){this.rewardOpen=false;UI.reward.classList.remove('show');this.resetRewardSelection();}
     }else{this.serverRewardMode=false;this.serverRewardChosen=false;this.rewardOpen=false;UI.reward?.classList.remove('show');}
-    if(newLevel && g.phase==='combat'){this.showCenterAlert('LEVEL '+g.wave+' · '+g.mission.label,g.mission.desc,g.mission.elite?'danger':'info',3);this.audio.cue(g.mission.elite?'boss':'start');}
+    if(newLevel && g.phase==='combat'){this.showCenterAlert('LEVEL '+g.wave+' · '+g.mission.label,g.mission.desc,g.mission.elite?'danger':'info',3);this.audio.cue(g.mission.elite?'boss':'start');this.narrateMission(g.mission);}
     this.applyServerEvents((payload.events || []).filter(e=>!['rewardStart','prepStart','waveStart','teamWipe'].includes(e.type)));
     this.updateHud();
     if(g.phase==='gameover'){this.setConnectionBlocked(false);this.endGame(g.outcome || 'defeated');}
@@ -2944,8 +2875,8 @@ class Game {
       if (ev.type === 'itemPickup') { if (ev.playerId === this.net?.socket?.id) { if (ev.weaponState) this.syncLocalWeaponState(ev.weaponState); this.showToast(ev.itemKind === 'health' ? '회복 상자 획득' : '탄약 상자 획득'); } this.audio.pickup(); }
       if (ev.type === 'medkitUse') { if (ev.playerId === this.net?.socket?.id) this.showToast(`회복키트 사용 HP +${Math.ceil(ev.amount || 0)}`); this.audio.pickup(); }
       if (ev.type === 'allyHeal') { if (ev.healerId === this.net?.socket?.id) this.showToast(`아군 치료 HP +${Math.ceil(ev.amount || 0)}`); if (ev.targetId === this.net?.socket?.id) this.showToast(`아군에게 치료받음 HP +${Math.ceil(ev.amount || 0)}`); this.audio.pickup(); }
-      if (ev.type === 'playerDowned') { if (ev.playerId === this.net?.socket?.id) { this.downed = true; this.hp = 0; this.showToast('쓰러짐: 아군 부활 대기'); } else this.showToast('아군이 쓰러짐'); this.audio.cue('down'); }
-      if (ev.type === 'allyRevive' || ev.type === 'playerRevived') { if ((ev.playerId || ev.targetId) === this.net?.socket?.id) { this.downed = false; this.showToast('아군이 부활시킴'); } else if (ev.healerId === this.net?.socket?.id) this.showToast('아군 부활 완료'); this.audio.cue('revive'); }
+      if (ev.type === 'playerDowned') { if (ev.playerId === this.net?.socket?.id) { this.downed = true; this.hp = 0; this.showToast('쓰러짐: 아군 부활 대기'); } else this.showToast('아군이 쓰러짐'); this.audio.cue('down');this.narrator.say('ally-down','생존자가 쓰러졌습니다. 가까이 가서 지원 버튼을 길게 누르세요.',{priority:3,cooldown:10000}); }
+      if (ev.type === 'allyRevive' || ev.type === 'playerRevived') { if ((ev.playerId || ev.targetId) === this.net?.socket?.id) { this.downed = false; this.showToast('아군이 부활시킴'); } else if (ev.healerId === this.net?.socket?.id) this.showToast('아군 부활 완료'); this.audio.cue('revive');this.narrator.say('ally-revive','생존자가 복귀했습니다.',{priority:2}); }
       if (ev.type === 'allyAssistFail') { if (ev.healerId === this.net?.socket?.id) this.showToast(ev.reason === 'noKit' ? '회복키트 부족' : ev.reason === 'far' ? '아군이 너무 멂' : '치료 불가'); }
       if (ev.type === 'teamWipe') { this.showToast('팀 전멸'); this.endGame(); }
     }
@@ -3039,7 +2970,7 @@ class Game {
     this.renderRewardChoices(prepared);
     UI.reward?.classList.add('show');
     this.mobile?.setGameplayActive(false);
-    this.audio.cue('complete');
+    this.audio.cue('complete');this.narrator.say('complete-'+this.wave,'구역 확보 완료. 보상을 선택하고 다음 구역을 준비하세요.',{priority:2});
   }
 
   removeRemotePlayer(playerId) {
@@ -3114,11 +3045,11 @@ class Game {
         ud.weaponGroup.rotation.z = r.reload ? -.16 : 0;
         const theme = this.weaponTheme(r.weapon);
         if (theme && r._weaponMaterialId !== r.weapon) {
-          if(ud.weaponGroup){if(ud.molotov)ud.weaponGroup.remove(ud.molotov);ud.molotov=null;if(r.weapon==='molotov'){ud.molotov=this.createMolotovModel();ud.molotov.position.set(0,.2,.1);ud.weaponGroup.add(ud.molotov);}}
-          for(const part of [ud.gunBody,ud.gunBarrel,ud.gunAccent])if(part)part.visible=r.weapon!=='molotov';
-          if (ud.gunBody) ud.gunBody.material = theme.body;
-          if (ud.gunBarrel) ud.gunBarrel.material = theme.barrel;
-          if (ud.gunAccent) ud.gunAccent.material = theme.accent;
+          if(ud.remoteModel)ud.weaponGroup.remove(ud.remoteModel);
+          this.modelKit ||= new VisualFactory();
+          ud.remoteModel=r.weapon==='molotov'?this.createMolotovModel():this.modelKit.weapon(r.weapon,!!this.quality?.simpleModels);
+          ud.remoteModel.scale.setScalar(.64);ud.remoteModel.rotation.y=Math.PI;ud.remoteModel.position.set(0,.08,.12);ud.weaponGroup.add(ud.remoteModel);
+          for(const part of [ud.gunBody,ud.gunBarrel,ud.gunAccent])if(part)part.visible=false;
           r._weaponMaterialId = r.weapon;
         }
       }
@@ -3126,35 +3057,13 @@ class Game {
   }
 
   buildViewWeapon() {
-    while (this.camera.children.length) this.camera.remove(this.camera.children[0]);
-    const g = new THREE.Group();
-    g.position.set(.34, -.33, -.78);
-    g.rotation.set(-.06, -.08, 0);
-    if (this.quality?.simpleModels) {
-      this.viewWeaponBody = new THREE.Mesh(this.geos.lowBox, this.materials.weaponDark);
-      this.viewWeaponBody.scale.set(.26, .20, .82);
-      g.add(this.viewWeaponBody);
-      this.viewWeaponBarrel = new THREE.Mesh(this.geos.lowBox, this.materials.weaponMetal);
-      this.viewWeaponBarrel.position.set(0, .03, -.58);
-      this.viewWeaponBarrel.scale.set(.13, .12, .58);
-      g.add(this.viewWeaponBarrel);
-      this.weaponAttachmentGroup = new THREE.Group();
-      g.add(this.weaponAttachmentGroup);
-      this.camera.add(g);
-      this.viewWeapon = g;
-      this.updateViewWeapon();
-      return;
-    }
-    this.viewWeaponBody = this.addPart(g, this.geos.lowBox, this.materials.weaponDark, 0, 0, 0, .26, .20, .82);
-    this.viewWeaponBarrel = this.addPart(g, this.geos.lowBox, this.materials.weaponMetal, 0, .03, -.58, .13, .12, .58);
-    this.weaponAttachmentGroup = new THREE.Group();
-    g.add(this.weaponAttachmentGroup);
-    this.viewLeftHand = this.addPart(g, this.geos.lowBox, this.materials.skin, -.25, -.13, .20, .18, .17, .34);
-    this.viewRightHand = this.addPart(g, this.geos.lowBox, this.materials.skin, .20, -.11, .28, .18, .17, .30);
-    this.viewForearm = this.addPart(g, this.geos.lowBox, this.materials.shirtBlack, -.08, -.23, .40, .46, .14, .34);
-    this.camera.add(g);
-    this.viewWeapon = g;
-    this.updateViewWeapon();
+    while(this.camera.children.length)this.camera.remove(this.camera.children[0]);
+    const g=new THREE.Group();g.position.set(.34,-.33,-.78);g.scale.setScalar(.72);
+    this.weaponAttachmentGroup=new THREE.Group();g.add(this.weaponAttachmentGroup);
+    this.viewLeftHand=this.addPart(g,this.geos.lowBox,this.materials.weaponDark,-.15,-.17,-.17,.14,.14,.23);
+    this.viewRightHand=this.addPart(g,this.geos.lowBox,this.materials.weaponDark,.075,-.25,.18,.15,.17,.21);
+    this.viewForearm=this.addPart(g,this.geos.lowBox,this.materials.shirtBlack,.1,-.30,.37,.18,.17,.30);
+    this.camera.add(g);this.viewWeapon=g;this.updateViewWeapon();
   }
 
   clearWeaponAttachments() {
@@ -3180,71 +3089,15 @@ class Game {
   }
 
   updateViewWeapon() {
-    if (!this.viewWeapon || !this.viewWeaponBody || !this.viewWeaponBarrel) return;
-    const w = this.getWeapon();
-    const theme = this.weaponTheme(w.id);
-    this.viewWeaponBody.visible=w.id!=='molotov';this.viewWeaponBarrel.visible=w.id!=='molotov';
-    this.viewWeaponBody.material = theme.body;
-    this.viewWeaponBarrel.material = theme.barrel;
-    const shape = {
-      pistol: [.28, .20, .62, .10, .10, .40, .31],
-      smg: [.32, .20, .88, .11, .10, .70, .40],
-      shotgun: [.42, .22, 1.05, .20, .13, .82, .45],
-      grenade: [.30, .28, .38, .18, .18, .22, .22],
-      barrel: [.42, .20, .50, .24, .08, .32, .24],
-      wall: [.48, .34, .26, .42, .10, .20, .20],
-      rocket: [.46, .26, 1.16, .26, .20, .84, .45],
-      railgun: [.30, .18, 1.30, .09, .08, 1.06, .47]
-    }[w.id] || [.26, .20, .72, .13, .12, .42, .34];
-    this.viewWeaponBody.scale.set(shape[0], shape[1], shape[2]);
-    this.viewWeaponBarrel.scale.set(shape[3], shape[4], shape[5]);
-    this.viewWeaponBarrel.position.z = -shape[6];
-
-    this.clearWeaponAttachments();
-    if(w.id==='molotov' && this.weaponAttachmentGroup){const bottle=this.createMolotovModel();bottle.scale.setScalar(1.5);bottle.position.set(0,-.16,-.28);bottle.rotation.z=-.16;this.weaponAttachmentGroup.add(bottle);return;}
-    if (this.quality?.simpleModels) return;
-    const a = this.weaponAttachmentGroup;
-    if (!a) return;
-    const m = this.materials;
-    // 각 무기의 실루엣과 색을 강하게 분리한다. 같은 박스 총처럼 보이지 않게
-    // 탄창, 손잡이, 펌프, 조준기, 코일, 경고띠 등을 무기별로 다르게 배치했다.
-    if (w.id === 'pistol') {
-      this.addPart(a, this.geos.lowBox, theme.accent, .00, .13, -.20, .16, .055, .18);
-      this.addPart(a, this.geos.lowBox, m.weaponMetal, .03, -.18, .10, .14, .28, .18, .20, 0, 0);
-      this.addPart(a, this.geos.lowBox, m.weaponMetal, 0, .10, -.56, .08, .075, .16);
-    } else if (w.id === 'smg') {
-      this.addPart(a, this.geos.lowBox, m.weaponMetal, -.13, -.16, -.05, .14, .42, .20, -.18, 0, 0);
-      this.addPart(a, this.geos.lowBox, theme.accent, .00, .15, -.46, .20, .045, .32);
-      this.addPart(a, this.geos.lowBox, m.weaponDark, .16, -.03, .17, .08, .18, .32);
-    } else if (w.id === 'shotgun') {
-      this.addPart(a, this.geos.lowBox, m.weaponMetal, 0, -.05, -.43, .28, .08, .52);
-      this.addPart(a, this.geos.lowBox, theme.accent, 0, .13, -.72, .26, .055, .20);
-      this.addPart(a, this.geos.lowBox, m.weaponDark, .00, -.18, .20, .28, .12, .34);
-    } else if (w.id === 'grenade') {
-      this.addPart(a, this.geos.sphere, theme.body, 0, .02, -.28, .82, .82, .82);
-      this.addPart(a, this.geos.lowBox, theme.accent, 0, .24, -.28, .30, .08, .20);
-      this.addPart(a, this.geos.lowBox, m.weaponMetal, .18, .13, -.28, .055, .22, .14);
-      this.addPart(a, this.geos.lowBox, m.weaponMetal, -.13, .15, -.28, .18, .045, .12, 0, 0, .35);
-    } else if (w.id === 'barrel') {
-      this.addPart(a, this.geos.mine, m.mineDark, 0, -.02, -.38, .68, .24, .68, Math.PI/2, 0, 0);
-      this.addPart(a, this.geos.mineButton, theme.accent, 0, .05, -.38, .70, .22, .70, Math.PI/2, 0, 0);
-      this.addPart(a, this.geos.lowBox, theme.accent, 0, .13, -.38, .90, .045, .12);
-    } else if (w.id === 'wall') {
-      this.addPart(a, this.geos.lowBox, m.fakeWall, 0, .02, -.36, .72, .46, .10);
-      this.addPart(a, this.geos.lowBox, m.trim, -.26, .02, -.31, .055, .52, .12);
-      this.addPart(a, this.geos.lowBox, m.trim, .26, .02, -.31, .055, .52, .12);
-      this.addPart(a, this.geos.lowBox, theme.accent, 0, .28, -.30, .34, .06, .12);
-    } else if (w.id === 'rocket') {
-      this.addPart(a, this.geos.lowBox, theme.accent, 0, .05, -.88, .34, .09, .18);
-      this.addPart(a, this.geos.lowBox, m.weaponMetal, -.24, -.05, -.42, .07, .18, .54);
-      this.addPart(a, this.geos.lowBox, m.weaponMetal, .24, -.05, -.42, .07, .18, .54);
-      this.addPart(a, this.geos.lowBox, m.gunRedAccent, 0, -.17, .17, .34, .12, .28);
-    } else if (w.id === 'railgun') {
-      this.addPart(a, this.geos.lowBox, m.gunAccent, -.17, .08, -.46, .05, .06, .90);
-      this.addPart(a, this.geos.lowBox, m.gunAccent, .17, .08, -.46, .05, .06, .90);
-      this.addPart(a, this.geos.lowBox, m.weaponDark, 0, -.13, -.15, .12, .22, .60);
-      this.addPart(a, this.geos.lowBox, m.gunAccent, 0, .18, -.84, .22, .045, .18);
-    }
+    if(!this.viewWeapon || !this.weaponAttachmentGroup)return;
+    this.clearWeaponAttachments();this.modelKit ||= new VisualFactory();
+    const id=this.getWeapon().id;
+    const model=id==='molotov'?this.createMolotovModel():this.modelKit.weapon(id,!!this.quality?.simpleModels);
+    if(id==='molotov'){model.position.set(0,-.04,-.10);model.rotation.z=-.12;}
+    this.weaponAttachmentGroup.add(model);this.weaponModel=model;
+    this.viewLeftHand.visible=!['pistol','grenade','molotov','wall'].includes(id);
+    this.viewRightHand.position.set(.075,id==='molotov'?-.17:-.25,id==='molotov'?0:.18);
+    this.mobile?.renderWeaponTray?.();
   }
 
   getMissionForWave(w) { return getMission(w); }
@@ -3260,8 +3113,10 @@ class Game {
     if(m.type==='core'){this.spawnObjectiveCores(m.coreCount);this.missionState.coreRemaining=this.objectiveCores.length;this.currentMission.coreCount=this.objectiveCores.length;}
     this.syncMissionTargets();this.missionTimer=this.missionState.timer;
     this.showCenterAlert('LEVEL '+this.wave+' · '+m.label,m.desc,m.elite?'danger':'info',3.2);
-    this.audio.cue(m.elite?'boss':'start');
+    this.audio.cue(m.elite?'boss':'start');this.narrateMission(m);
   }
+
+  narrateMission(m){this.narrator.say('level-'+m.wave,`레벨 ${m.wave}. ${MISSION_LINES[m.short] || m.desc}`,{cooldown:60000,priority:m.elite?3:1});}
 
   missionObjectiveText() { return missionHint(this.currentMission,this.missionState,{remaining:this.spawnQueue+this.enemies.filter(e=>e.alive).length}); }
 
@@ -3767,6 +3622,7 @@ class Game {
       if(second>0 && second<=3 && second!==this.audioPrepSecond)this.audio.countdown();
       this.audioPrepSecond=second;
     }else this.audioPrepSecond=null;
+    if(!this.paused&&!this.rewardOpen&&!this.prepPhase&&this.hp>0&&this.hp/Math.max(1,this.maxHp || this.player?.maxHp || 100)<.25)this.narrator.say('low-health','생명력이 위험합니다. 엄폐한 뒤 회복하세요.',{priority:3,cooldown:30000});
     const m=this.currentMission,s=this.missionState;if(!m||!s)return;
     if(this.audioProgress?.wave!==this.wave){this.audioProgress={wave:this.wave,relay:s.progress||0};return;}
     if(m.type==='relay'){
@@ -3869,8 +3725,9 @@ class Game {
     if (this.input.actionDown('backward')) mz += 1;
     if (this.input.actionDown('left')) mx -= 1;
     if (this.input.actionDown('right')) mx += 1;
+    if(this.isTouchInputActive() && this.input.moveAxis){mx=this.input.moveAxis.x;mz=this.input.moveAxis.z;}
     const rawMove = Math.hypot(mx, mz);
-    const len = rawMove || 1;
+    const len = Math.max(1,rawMove);
     mx /= len; mz /= len;
     const wantsSprint = this.input.actionDown('sprint');
     this.player.staminaLocked = this.player.stamina <= 0;
@@ -4368,12 +4225,8 @@ class Game {
 
   getMuzzleWorldPosition() {
     const fallback = new THREE.Vector3(this.player.x, this.getEyeY() - .22, this.player.z);
-    if (!this.viewWeaponBarrel) return fallback;
-    this.camera.updateMatrixWorld(true);
-    this.viewWeaponBarrel.updateMatrixWorld(true);
-    const tip = new THREE.Vector3(0, 0, -0.5);
-    tip.applyMatrix4(this.viewWeaponBarrel.matrixWorld);
-    return tip;
+    const muzzle=this.weaponModel?.userData?.muzzle;if(!muzzle)return fallback;
+    this.camera.updateMatrixWorld(true);return muzzle.getWorldPosition(new THREE.Vector3());
   }
 
   lookDirection(yaw = this.yaw, pitch = this.pitch) {
@@ -4527,6 +4380,9 @@ class Game {
     this.addPart(g,this.geos.bottle,this.materials.bottle,0,0,0,1,1,1);
     this.addPart(g,this.geos.bottleNeck,this.materials.bottle,0,.27,0,1,1,1);
     this.addPart(g,this.geos.lowBox,this.materials.gunYellowAccent,0,.12,.125,.19,.11,.01);
+    this.addPart(g,this.geos.lowBox,this.materials.weaponDark,0,.12,.133,.10,.045,.009,0,0,.35);
+    this.addPart(g,this.geos.lowBox,this.materials.weaponMetal,0,.31,0,.105,.035,.10);
+    this.addPart(g,this.geos.lowBox,this.materials.gunYellowAccent,-.073,.12,.137,.018,.1,.008);
     this.addPart(g,this.geos.lowBox,this.materials.iceBlue,.025,.39,0,.055,.13,.045,0,0,-.3);
     const flame=new THREE.Mesh(this.geos.flame,this.materials.flame);flame.position.y=.57;flame.scale.set(.25,.4,1);g.add(flame);
     return g;
@@ -4894,8 +4750,7 @@ class Game {
     const fullPoseFrame = !simpleModels || this.frameNumber % 2 === 0;
     for (const e of this.enemies) {
       if (!e.alive) continue;
-      if (simpleModels) e.mesh.position.set(e.x, 0, e.z);
-      else if (fullPoseFrame) this.applyEnemyVisualPose(e);
+      if (fullPoseFrame) this.applyEnemyVisualPose(e);
       else { e.mesh.position.x = e.x; e.mesh.position.z = e.z; }
     }
     this.enemies = this.enemies.filter(e => e.alive || e.mesh.parent);
@@ -5701,86 +5556,7 @@ class Game {
   }
 
   applyEnemyVisualPose(e) {
-    const walk = clamp((e.walkSpeed || 0) / Math.max(.1, e.speed || 1), 0, 1);
-    const phase = e.walkPhase || 0;
-    // 과한 상하 움직임과 좌우 기울임은 뒤뚱뒤뚱 걷는 느낌을 만들기 때문에
-    // 몸통은 안정시키고 팔다리만 걷는 리듬을 보이게 한다.
-    const bodyMoveScale = e.type === 'devil' ? .62 : (e.type === 'tank' ? .52 : (e.type === 'bomber' ? .88 : (e.type === 'runner' ? .92 : .78)));
-    const walkBob = Math.abs(Math.sin(phase)) * .026 * walk * bodyMoveScale;
-    const bodySway = Math.sin(phase * 2) * .018 * walk * bodyMoveScale;
-    const bodyNod = Math.sin(phase) * .010 * walk * bodyMoveScale;
-    const lateral = Math.sin(phase * 2) * .010 * walk * bodyMoveScale;
-    const idleFloat = 0;
-    const recoilK = e.recoilTimer > 0 ? Math.sin((e.recoilTimer / Math.max(.001, e.recoilMax || .24)) * Math.PI) : 0;
-    const recoilX = (e.recoilDir?.x || 0) * .22 * recoilK;
-    const recoilZ = (e.recoilDir?.z || 0) * .22 * recoilK;
-    const facing = e.mesh.rotation.y || 0;
-    const rightX = Math.cos(facing);
-    const rightZ = -Math.sin(facing);
-    e.mesh.position.x = e.x + recoilX + rightX * lateral;
-    e.mesh.position.z = e.z + recoilZ + rightZ * lateral;
-    e.mesh.position.y = idleFloat + walkBob;
-
-    const attackK = e.attackAnim > 0 ? Math.sin((1 - e.attackAnim / Math.max(.001, e.attackMax || .32)) * Math.PI) : 0;
-    const castK = e.castAnim > 0 ? Math.sin((1 - e.castAnim / Math.max(.001, e.castMax || .48)) * Math.PI) : 0;
-    const arms = e.mesh.userData || {};
-    const armSwing = Math.sin(phase) * walk;
-    const sideSwing = Math.sin(phase * 2) * walk;
-    if (arms.leftArm && arms.rightArm) {
-      if (e.type === 'devil') {
-        const walkArm = armSwing * .13 * (1 - castK) * (1 - attackK);
-        arms.leftArm.rotation.x = -1.18 * castK - .42 * attackK + walkArm;
-        arms.rightArm.rotation.x = -1.18 * castK - .42 * attackK - walkArm;
-        arms.leftArm.rotation.z = -.22 * castK;
-        arms.rightArm.rotation.z = .22 * castK;
-        arms.leftArm.position.z = .16 + .34 * castK + .16 * attackK;
-        arms.rightArm.position.z = .16 + .34 * castK + .16 * attackK;
-        arms.leftArm.position.y = 1.03;
-        arms.rightArm.position.y = 1.03;
-      } else {
-        const walkArm = armSwing * .30 * (1 - attackK);
-        arms.leftArm.rotation.x = -1.65 * attackK + walkArm;
-        arms.rightArm.rotation.x = -1.52 * attackK - walkArm;
-        arms.leftArm.rotation.z = -.20 * attackK;
-        arms.rightArm.rotation.z = .20 * attackK;
-        arms.leftArm.position.z = .16 + .58 * attackK + Math.abs(armSwing) * .018;
-        arms.rightArm.position.z = .16 + .54 * attackK + Math.abs(armSwing) * .018;
-        arms.leftArm.position.y = .98 + .08 * attackK;
-        arms.rightArm.position.y = .98 + .08 * attackK;
-      }
-    }
-
-    if (arms.leftLeg && arms.rightLeg) {
-      const legSwing = Math.sin(phase) * .24 * walk;
-      arms.leftLeg.rotation.x = legSwing;
-      arms.rightLeg.rotation.x = -legSwing;
-      arms.leftLeg.position.y = .28 + Math.max(0, -legSwing) * .018;
-      arms.rightLeg.position.y = .28 + Math.max(0, legSwing) * .018;
-    }
-
-    if (e.type === 'bomber') {
-      const flashOn = (e.bomberFlash || 0) > 0 && Math.floor(now() * 14) % 2 === 0;
-      if (e._flashState !== flashOn) {
-        e._flashState = flashOn;
-        e.mesh.traverse(obj => {
-          if (obj.material && obj.material.emissive) {
-            obj.material.emissive.setHex(flashOn ? 0x441000 : 0x000000);
-            obj.material.emissiveIntensity = flashOn ? .65 : 0;
-          }
-        });
-      }
-    }
-
-    if (e.hitTimer > 0) {
-      const k = Math.sin((e.hitTimer / Math.max(.001, e.hitMax || .16)) * Math.PI);
-      e.mesh.rotation.x = -(e.hitLean || .18) * k - .10 * attackK + bodyNod;
-      e.mesh.rotation.z = (e.hitSide || 0) * .10 * k + bodySway * .45;
-    } else {
-      e.mesh.rotation.x = bodyNod - .06 * attackK;
-      e.mesh.rotation.z = bodySway;
-    }
-    // 진행 방향을 약간 따라 흔들리는 정도만 추가한다. 너무 크면 뒤뚱거려 보이므로 낮게 제한.
-    e.mesh.rotation.y += Math.sin(phase) * .010 * walk * bodyMoveScale;
+    animateEnemy(e,this.simTime || now(),e.type==='bomber' && dist2(e.x,e.z,this.player.x,this.player.z)<36);
   }
 
   moveEnemy(e, dx, dz) {
@@ -5928,7 +5704,7 @@ class Game {
     }
     if (!this.quality?.simpleModels) {
       e.mesh.scale.setScalar(1 + clamp(amount / 180, .035, .16));
-      setTimeout(() => { if (e.mesh && e.alive) e.mesh.scale.setScalar(1); }, 55);
+      setTimeout(() => { if (e.mesh && e.alive) e.mesh.scale.setScalar(e.elite?1.18:1); }, 55);
     }
     if (source !== 'fireball') this.addBloodPatch(e, amount, source);
     if (e.hp <= 0) this.killEnemy(e, source);
@@ -6327,12 +6103,13 @@ class Game {
     if (this.viewWeapon) {
       const reloadPhase = this.reload?.active ? 1 - clamp(this.reload.timer / Math.max(.01, this.reload.duration), 0, 1) : 0;
       const reloadWave = reloadPhase > 0 ? Math.sin(reloadPhase * Math.PI) : 0;
+      animateWeapon(this.weaponModel,{kick:this.weaponKick,reload:reloadPhase,time:this.simTime});
       const reloadRoll = reloadPhase > 0 ? Math.sin(reloadPhase * Math.PI * 2) * .06 : 0;
       const hipX = .34 + bobSide * .55 - reloadWave * .08;
       const hipY = -.33 - this.weaponKick + bobY * .45 - reloadWave * .16;
       const hipZ = -.78 + this.weaponKick * .18 + reloadWave * .09;
       const adsX = .015 + bobSide * .10 - reloadWave * .015;
-      const adsY = -.235 - this.weaponKick * .34 + bobY * .18 - reloadWave * .08;
+      const adsY = -.122 - this.weaponKick * .34 + bobY * .18 - reloadWave * .08;
       const adsZ = -.62 + this.weaponKick * .06 + reloadWave * .04;
       this.viewWeapon.position.set(
         hipX + (adsX - hipX) * this.ads,
@@ -6341,7 +6118,7 @@ class Game {
       );
       const hipRx = -.06 - this.weaponKick * .35 - reloadWave * .18;
       const hipRy = -.08 + bobSide * .65 + reloadRoll;
-      const adsRx = -.01 - this.weaponKick * .18 - reloadWave * .08;
+      const adsRx = -this.weaponKick * .18 - reloadWave * .08;
       const adsRy = reloadRoll * .45;
       this.viewWeapon.rotation.set(
         hipRx + (adsRx - hipRx) * this.ads,
@@ -6515,7 +6292,7 @@ class Game {
     UI.reward?.classList.toggle('can-extract', canExtract);
     this.renderRewardChoices(pool);
     UI.reward?.classList.add('show');
-    this.audio.cue('complete');
+    this.audio.cue('complete');this.narrator.say('complete-'+this.wave,'구역 확보 완료. 보상을 선택하고 다음 구역을 준비하세요.',{priority:2});
   }
 
   usesMobileRewardConfirmation() {
@@ -6749,6 +6526,7 @@ class Game {
     this.runOutcome = outcome;
     const record = this.saveBestStats();
     this.recordCareer(outcome);
+    this.narrator.stop();this.narrator.say('run-end',outcome==='extracted'?'탈출 완료. 수고하셨습니다.':'생존 신호가 끊겼습니다. 작전을 종료합니다.',{priority:4,force:true});
     this.audio.stopAll();this.audio.cue(outcome==='extracted'?'extracted':'defeated');UI.soundSettings?.classList.remove('show');
     this.gameOver = true;
     this.running = false;this.paused=false;UI.pause?.classList.remove('show');UI.reward?.classList.remove('show');UI.connectionOverlay?.classList.remove('show');this.connectionBlocked=false;
@@ -6789,10 +6567,11 @@ class Game {
     if(wasBlocked!==!!blocked&&this.running)this.audio.cue(blocked?'disconnected':'connected');
     UI.connectionOverlay?.classList.toggle('show',!!blocked);
     if(UI.connectionTitle)UI.connectionTitle.textContent=title || '친구의 연결을 기다립니다';if(UI.connectionCopy)UI.connectionCopy.textContent=copy || '최대 2분 동안 현재 진행을 보관합니다.';
-    if(blocked){this.input.resetTransient();this.net.sendInput(true);this.mobile?.setGameplayActive(false);try{document.exitPointerLock?.();}catch{}}
+    if(blocked){this.narrator.stop();this.input.resetTransient();this.net.sendInput(true);this.mobile?.setGameplayActive(false);try{document.exitPointerLock?.();}catch{}}
     else if(wasBlocked && this.running && !this.paused && !this.rewardOpen){if(this.isTouchInputActive())this.mobile?.setGameplayActive(true);else{this.paused=true;UI.pause?.classList.add('show');this.showToast('연결 복구 완료. 계속하기를 눌러주세요.');}}
   }
   disposeWorld() {
+    this.modelKit?.dispose();this.modelKit=null;
     if(!this.scene)return;const geometries=new Set(),materials=new Set();
     this.scene.traverse(o=>{if(o.geometry)geometries.add(o.geometry);if(o.material)for(const m of [].concat(o.material))materials.add(m);});
     for(const g of geometries)g.dispose();for(const m of materials)m.dispose();

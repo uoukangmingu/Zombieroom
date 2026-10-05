@@ -132,7 +132,7 @@ function updateServerPlayers(room, dt) {
     const ps = player.state;
     const m = player.motion;
     const inp=player.input;
-    if(!player.connected || Date.now()-inp.updatedAt>250){inp.keys={};inp.flags={};player.motion.vx=player.motion.vz=0;}
+    if(!player.connected || Date.now()-inp.updatedAt>250){inp.keys={};inp.flags={};inp.axes=null;player.motion.vx=player.motion.vz=0;}
     const keys = inp.keys || {};
     const flags = inp.flags || {};
     const lockedDown = !!ps.downed || ps.hp <= 0;
@@ -149,8 +149,9 @@ function updateServerPlayers(room, dt) {
     if (keyDown(keys, 'KeyS', 'ArrowDown')) mz += 1;
     if (keyDown(keys, 'KeyA', 'ArrowLeft')) mx -= 1;
     if (keyDown(keys, 'KeyD', 'ArrowRight')) mx += 1;
+    if(inp.axes){mx=inp.axes.x;mz=inp.axes.z;}
     const rawMove = Math.hypot(mx, mz);
-    if (rawMove > 0) { mx /= rawMove; mz /= rawMove; }
+    if (rawMove > 1) { mx /= rawMove; mz /= rawMove; }
     const wantsSprint = keyDown(keys, 'ShiftLeft', 'ShiftRight');
     const ads = !!flags.ads;
     m.staminaLocked = m.stamina <= 0;
@@ -850,7 +851,8 @@ io.on('connection',socket=>{
     const flags={fire:!!payload.flags?.fire,ads:!!payload.flags?.ads,interact:!!payload.flags?.interact,assist:!!payload.flags?.assist,move:n(payload.flags?.move,0,0,1)};
     const weapon=Object.hasOwn(WEAPONS,payload.weapon)?payload.weapon:'pistol';
     if(p.input.weapon!==weapon && p.weaponState.reload)cancelServerReload(room,p);
-    p.input={keys,flags,look:{yaw:n(payload.look?.yaw,p.state.yaw,-1e5,1e5),pitch:n(payload.look?.pitch,p.state.pitch,-1.18,1.10)},weapon,updatedAt:Date.now()};
+    const axes=payload.axes && typeof payload.axes==='object'?{x:n(payload.axes.x,0,-1,1),z:n(payload.axes.z,0,-1,1)}:null;
+    p.input={keys,flags,axes,look:{yaw:n(payload.look?.yaw,p.state.yaw,-1e5,1e5),pitch:n(payload.look?.pitch,p.state.pitch,-1.18,1.10)},weapon,updatedAt:Date.now()};
     p.state.yaw=p.input.look.yaw;p.state.pitch=p.input.look.pitch;p.state.weapon=weapon;p.state.ads=flags.ads;
   });
   bind('playerAction',payload=>{

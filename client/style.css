@@ -1127,3 +1127,54 @@ button:disabled { opacity:.38; cursor:default; filter:none; box-shadow:none; }
 .connection-guide summary{cursor:pointer;color:#dcebdd;}.connection-guide p{margin:10px 0;}.invite-link{margin-bottom:10px;font-size:12px;}
 .creature-audition select{width:100%;min-width:0;}.weapon-slot[data-weapon="molotov"].unlocked{border-color:#ff8c3eaa;}
 @media(max-width:520px){.server-connect,.creature-audition{grid-template-columns:1fr;}}
+
+/* 1.3: readable touch controls, direct selection and comms */
+.mobile-control { left:clamp(calc(var(--control-half-x,24px) * var(--mobile-scale,1) + 6px + env(safe-area-inset-left)),var(--mobile-x),calc(100% - var(--control-half-x,24px) * var(--mobile-scale,1) - 6px - env(safe-area-inset-right))); top:clamp(calc(var(--control-half-y,24px) * var(--mobile-scale,1) + 6px + env(safe-area-inset-top)),var(--mobile-y),calc(100% - var(--control-half-y,24px) * var(--mobile-scale,1) - 6px - env(safe-area-inset-bottom))); }
+.mobile-action { width:clamp(46px,7vw,62px); height:clamp(46px,7vw,62px); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:4px; font-size:10px; font-weight:650; background:rgba(10,23,28,.64); border-color:rgba(197,220,215,.5); box-shadow:inset 0 1px rgba(255,255,255,.08),0 3px 14px #0003; }
+.mobile-action[hidden] {display:none;}
+.mobile-action svg {width:22px;height:22px;flex-shrink:0;}
+.mobile-action .control-label {line-height:1.2;max-width:100%;white-space:nowrap;}
+.mobile-action .control-meta {font:600 9px/1.1 system-ui;color:#d7ded7;min-height:0;}
+.mobile-action .control-meta:empty {display:none;}
+.mobile-action.action-fire {width:clamp(68px,10vw,84px);height:clamp(68px,10vw,84px);background:rgba(130,49,37,.64);border:2px solid #e6a58a;}
+.mobile-action.action-fire svg {width:30px;height:30px;}
+.mobile-action.action-fire-left {width:58px;height:58px;}
+.mobile-action.action-pause {min-width:44px;min-height:44px;}
+.mobile-action.action-pause .control-label {display:none;}
+.mobile-action[data-action="weapon"] {width:clamp(72px,10vw,94px);border-radius:16px;}
+.mobile-action[data-action="weapon"] svg {width:29px;height:20px;}
+.mobile-action.reloading {background:conic-gradient(#e5b75b99 var(--reload-progress,0%),#11242bc9 0);}
+.mobile-joystick {width:clamp(108px,15vw,134px);height:clamp(108px,15vw,134px);background:radial-gradient(circle,#152c3688 35%,#91aea322 36%,#13273266 38%,#14232b77 65%,#adc6bd55 66%,#0b1b2288 68%);}
+.mobile-joystick>span {font-size:9px;white-space:nowrap;}
+.mobile-weapon-tray {position:fixed;inset:0;z-index:115;display:grid;place-items:center;background:#04131999;backdrop-filter:blur(6px);pointer-events:auto;touch-action:none;}
+.mobile-weapon-tray[hidden] {display:none;}
+.weapon-tray-panel {width:min(440px,calc(100vw - 32px));max-height:calc(100dvh - 20px);overflow:auto;padding:16px;background:#102128f5;border:1px solid #74908888;border-radius:20px;box-shadow:0 14px 60px #0007;}
+.weapon-tray-heading {display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:10px;}
+.weapon-tray-heading b {font-size:17px;letter-spacing:-.5px;}
+.weapon-tray-heading small {display:block;font-size:11px;color:#9ab7b0;margin-top:2px;}
+.weapon-tray-heading button {width:44px;height:44px;border-radius:12px;background:#20363e;border:1px solid #546b72;color:#e4eee7;font-size:18px;}
+.mobile-weapon-grid {display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+.mobile-weapon-grid button {min-height:62px;display:grid;grid-template-columns:32px 1fr;align-items:center;text-align:left;column-gap:6px;padding:9px;background:#1a3038;border:1px solid #4b666c;border-radius:11px;color:#dce6df;}
+.mobile-weapon-grid button svg {width:29px;height:29px;grid-row:span 2;}
+.mobile-weapon-grid button b {font-size:11px;white-space:nowrap;}
+.mobile-weapon-grid button small {font-size:10px;color:#a7beb5;}
+.mobile-weapon-grid button.selected {border-color:#efbd67;background:#624d25;color:#fff1ce;}
+.mobile-weapon-grid button:disabled {opacity:.38;}
+.narration-settings {margin-top:18px;padding:16px;background:#102827;border:1px solid #43605a;border-radius:14px;}
+.narration-heading {display:flex;align-items:baseline;gap:10px;margin-bottom:12px;}
+.narration-heading b {color:#cde5d6;}.narration-heading span {font-size:11px;color:#8cac9e;}
+.narration-options {display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:12px;}
+.narration-settings label {display:flex;flex-direction:column;gap:6px;font-size:12px;color:#bdd1c4;position:relative;}
+.narration-settings label>b {position:absolute;right:0;font-size:11px;color:#ecbd71;}
+.narration-settings select {width:100%;min-height:38px;padding:8px;background:#122522;color:#e0ebdf;border:1px solid #49625b;border-radius:8px;}
+.narration-settings input[type=range] {width:100%;min-height:38px;accent-color:#e6bc72;}
+.narration-voice-row {display:flex;align-items:end;gap:10px;margin-top:12px;}.narration-voice-row label {flex:1;min-width:0;}
+#narration-status {margin:12px 0 0;font-size:11px;line-height:1.6;color:#98b4a6;}
+.narration-caption {position:fixed;z-index:190;bottom:max(20px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);width:max-content;max-width:min(650px,88vw);padding:12px 18px;border:1px solid #789d8e99;border-left:3px solid #ddb368;border-radius:10px;background:#0c2128ed;color:#e1ebda;box-shadow:0 8px 30px #0005;text-align:center;font-size:14px;line-height:1.6;pointer-events:none;}
+.narration-caption::before {content:'생존 통신';display:block;font-size:9px;letter-spacing:2px;color:#ddb368;margin-bottom:2px;}
+.narration-caption[hidden] {display:none;}
+body.mobile-playing .narration-caption {bottom:auto;top:22%;max-width:48vw;padding:7px 12px;font-size:11px;}
+@media(max-height:500px){.weapon-tray-panel{padding:12px 16px}.weapon-tray-heading{margin-bottom:6px}.mobile-weapon-grid{gap:6px}.mobile-weapon-grid button{min-height:57px;padding:7px}.narration-settings{padding:12px}.narration-heading{margin-bottom:8px}}
+
+#mobile-weapon-close {display:grid;place-items:center;padding:0;}
+#mobile-weapon-close svg {width:20px;height:20px;}

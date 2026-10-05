@@ -1,2 +1,2 @@
-export const BUILD_VERSION='1.2.0';
-export const PROTOCOL_VERSION=5;
+export const BUILD_VERSION='1.3.0';
+export const PROTOCOL_VERSION=6;

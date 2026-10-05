@@ -140,7 +140,7 @@ export class NetAdapter {
     const keys={};
     if(!blocked)for(const [action,code]of Object.entries({forward:'KeyW',backward:'KeyS',left:'KeyA',right:'KeyD',jump:'Space',sprint:'ShiftLeft',interact:'KeyF'}))if(g.input.actionDown(action))keys[code]=true;
     this.socket.volatile.emit('playerInput',{
-      roomCode:g.lobby.roomCode,seq:++this.seq,keys,look:{yaw:g.yaw,pitch:g.pitch},weapon:g.selectedWeapon,
+      roomCode:g.lobby.roomCode,seq:++this.seq,keys,axes:!blocked&&g.isTouchInputActive()?g.input.moveAxis:null,look:{yaw:g.yaw,pitch:g.pitch},weapon:g.selectedWeapon,
       flags:{fire:!blocked&&g.input.actionDown('fire'),ads:!blocked&&g.input.actionDown('aim'),assist:!blocked&&g.input.actionDown('heal'),interact:!blocked&&g.input.actionDown('interact'),move:blocked?0:g.moveIntensity}
     });
   }
