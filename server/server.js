@@ -1,7 +1,12 @@
 import {randomBytes,randomUUID} from 'node:crypto';
+import {networkInterfaces} from 'node:os';
+import {BUILD_VERSION,PROTOCOL_VERSION} from '../shared/version.js';
+import {normalizeServerUrl} from '../shared/connection.js';
 import {MAPS,DIFFICULTY,WEAPONS,enemyStats,pickEnemyType} from '../shared/arena.js';
 import {getMission,createMissionState,tickMission,waveSpawnCount} from '../shared/missions.js';
 import {Navigation} from '../shared/navigation.js';
+import {approachPoint,personalSteering,personalPace,personalityOf} from '../shared/enemy-behavior.js';
+import {FIRE_RULES,makeFirePatch,strongestFireAt,tickBurning} from '../shared/fire.js';
 import {newUpgrades,rewardChoices,applyReward} from '../shared/rewards.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,7 +24,14 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 const CLIENT_DIR = path.join(ROOT_DIR, 'client');
 
 const CORS_ORIGIN = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map(s => s.trim()).filter(Boolean) : true;
-const SERVER_VERSION = '1.0.0';
+const SERVER_VERSION = BUILD_VERSION;
+function connectionInfo(socket=null){
+  const local=!socket || ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(socket.handshake.address);
+  const port=httpServer.address()?.port || 3000,lanUrls=[];
+  try{if(local)for(const list of Object.values(networkInterfaces()))for(const net of list || [])if(net.family==='IPv4'&&!net.internal&&!net.address.startsWith('169.254.'))lanUrls.push(`http://${net.address}:${port}`);}catch{/* Some containers hide their network interfaces; hosting still works. */}
+  let publicUrl='';try{if(process.env.PUBLIC_URL)publicUrl=normalizeServerUrl(process.env.PUBLIC_URL);}catch{}
+  return {version:SERVER_VERSION,protocol:PROTOCOL_VERSION,lanUrls,publicUrl};
+}
 
 const app = express();
 const httpServer = createServer(app);
@@ -65,8 +77,7 @@ function weaponPublicState(player) {
   };
 }
 function weaponUnlocked(id, wave = 1) {
-  const unlock = { pistol:1, smg:2, shotgun:3, grenade:4, barrel:5, wall:6, rocket:7, railgun:9 };
-  return (unlock[id] || 1) <= wave;
+  return !!WEAPONS[id] && WEAPONS[id].unlockWave <= wave;
 }
 
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
@@ -209,7 +220,8 @@ function bindSocketToPlayer(room,player,socket) {
   if(room.game?.reward?.choicesByPlayer?.[old]){room.game.reward.choicesByPlayer[socket.id]=room.game.reward.choicesByPlayer[old];delete room.game.reward.choicesByPlayer[old];}
   for(const votes of [room.game?.prepVotes,room.game?.reward?.extractVotes])if(votes && Object.hasOwn(votes,old)){votes[socket.id]=votes[old];delete votes[old];}
   for(const p of room.players.values())if(p.assist?.target===old)p.assist.target=socket.id;
-  for(const p of room.game?.projectiles || [])if(p.ownerId===old)p.ownerId=socket.id;
+  for(const p of [...(room.game?.projectiles || []),...(room.game?.firePatches || [])])if(p.ownerId===old)p.ownerId=socket.id;
+  for(const e of room.game?.enemies || [])if(e.burnOwnerId===old)e.burnOwnerId=socket.id;
   room.players.set(socket.id,player);socket.join(room.roomCode);socket.data.roomCode=room.roomCode;socket.data.playerToken=player.token;
   room.emptyAt=0;return player;
 }
@@ -227,7 +239,7 @@ function leaveCurrentRoom(socket,{soft=false}={}) {
 function makeGame(settings) {
   const config=sanitizeSettings(settings),map=MAPS[config.map],wave=Number(config.startWave),nav=new Navigation(map);
   const game={id:randomUUID(),wave,mapId:config.map,diffId:config.diff,map,nav,enemies:[],nextEnemyId:1,placeables:[],nextPlaceableId:1,items:[],nextItemId:1,itemTimer:3,
-    projectiles:[],nextProjectileId:1,cores:[],phase:'combat',prepTimer:0,reward:null,score:0,kills:0,headshots:0,events:[],elapsed:0,suspended:false,missionsCleared:0,bonusesCleared:0,prepVotes:{}};
+    projectiles:[],nextProjectileId:1,firePatches:[],nextFireId:1,fireTick:0,cores:[],phase:'combat',prepTimer:0,reward:null,score:0,kills:0,headshots:0,events:[],elapsed:0,suspended:false,missionsCleared:0,bonusesCleared:0,prepVotes:{}};
   setupServerMission(game);return game;
 }
 
@@ -310,11 +322,18 @@ function findSpawn(game,players) {
 function spawnEnemy(game,room) {
   const sp=findSpawn(game,[...room.players.values()]);if(!sp)return false;
   const elite=!!game.elitePending,type=elite?game.mission.elite:pickEnemyType(game.wave,game.mission),stats=enemyStats(type,game.wave,DIFFICULTY[game.diffId]);
-  game.elitePending=false;const e={id:game.nextEnemyId++,type,x:sp.x,z:sp.z,vx:0,vz:0,yaw:0,hp:stats.hp*(elite?2.35:1),maxHp:stats.hp*(elite?2.35:1),speed:stats.speed*(elite?1.08:1),radius:stats.radius*(elite?1.1:1),damage:stats.damage*(elite?1.32:1),score:stats.score*(elite?3:1),elite,attackCd:.6,alive:true,targetPlayerId:null,lastHitPart:'body'};
+  game.elitePending=false;const e={personalitySeed:game.nextEnemyId+game.wave*9973,id:game.nextEnemyId++,type,x:sp.x,z:sp.z,vx:0,vz:0,yaw:0,hp:stats.hp*(elite?2.35:1),maxHp:stats.hp*(elite?2.35:1),speed:stats.speed*(elite?1.08:1),radius:stats.radius*(elite?1.1:1),damage:stats.damage*(elite?1.32:1),score:stats.score*(elite?3:1),elite,attackCd:.6,alive:true,targetPlayerId:null,lastHitPart:'body'};
   game.enemies.push(e);game.events.push({type:'enemySpawn',enemyId:e.id,enemyType:type,x:e.x,z:e.z,elite});return true;
 }
-function steerAroundWalls(game,e,tx,tz,dt) {
-  e.think=(e.think || 0)-dt;if(e.think<=0 || !e.steer){e.steer=game.nav.direction(e.x,e.z,tx,tz);e.think=.12+(e.id%5)*.01;}
+function steerAroundWalls(game,e,target,dt) {
+  e.think=(e.think || 0)-dt;
+  if(e.think<=0 || !e.steer){
+    const clear=(ax,az,bx,bz,r=.6)=>game.nav.clear({x:ax,z:az},{x:bx,z:bz},r) && hasLineOfSightGame(game,ax,az,bx,bz);
+    const point=approachPoint(e,target,game.elapsed,clear);
+    const direction=game.nav.direction(e.x,e.z,point.x,point.z);
+    e.steer=personalSteering(e,direction,target,game.enemies,game.elapsed,{clear,hazards:game.firePatches});
+    e.think=personalityOf(e).think;
+  }
   return e.steer;
 }
 function moveEnemy(game,e,dx,dz) {
@@ -334,7 +353,7 @@ function updateEnemies(room, dt) {
     for (const p of players) {
       const d = dist2(e.x, e.z, p.state.x, p.state.z);
       const losBonus = hasLineOfSightGame(game, e.x, e.z, p.state.x, p.state.z) ? -.5 : 0;
-      const score = Math.sqrt(d) + losBonus;
+      const score = Math.sqrt(d) + losBonus - (e.targetPlayerId===p.id?1.25:0);
       if (score < bestD) { bestD = score; target = p; }
     }
     if (!target) continue;
@@ -344,7 +363,7 @@ function updateEnemies(room, dt) {
     const d = Math.hypot(dxp, dzp) || 1;
     const rayDx = dxp / d, rayDz = dzp / d;
     const wallBlocker = findWallOnRayGame(game, e.x, e.z, rayDx, rayDz, Math.min(d, 18));
-    const dir = steerAroundWalls(game, e, px, pz, dt);
+    const dir = steerAroundWalls(game,e,{x:px,z:pz,vx:target.motion.vx,vz:target.motion.vz},dt);
     e.yaw = Math.atan2(dir.x, dir.z);
     if (wallBlocker && wallBlocker.distance < e.radius + 1.25 && e.attackCd <= 0 && e.type !== 'devil') {
       e.attackCd = e.type === 'tank' ? .72 : .92;
@@ -361,8 +380,9 @@ function updateEnemies(room, dt) {
       if(e.attackCd<=0 && !e.cast){e.cast={remaining:.55,dx:rayDx,dz:rayDz};e.attackCd=2.1;game.events.push({type:'devilCast',enemyId:e.id,targetPlayerId:target.id,x:e.x,z:e.z});}
     } else {
       const acc = 1 - Math.exp(-dt * 8);
-      e.vx += (dir.x * e.speed - e.vx) * acc;
-      e.vz += (dir.z * e.speed - e.vz) * acc;
+      const speed=e.speed*personalPace(e,game.elapsed);
+      e.vx += (dir.x * speed - e.vx) * acc;
+      e.vz += (dir.z * speed - e.vz) * acc;
       moveEnemy(game, e, e.vx * dt, e.vz * dt);
     }
     if(e.cast){e.cast.remaining-=dt;if(e.cast.remaining<=0){const c=e.cast;e.cast=null;game.projectiles.push({id:game.nextProjectileId++,kind:'fireball',enemyId:e.id,x:e.x+c.dx,y:1.1,z:e.z+c.dz,vx:c.dx*8.5,vy:0,vz:c.dz*8.5,life:3,radius:2.1,damage:e.damage,alive:true});}}
@@ -500,7 +520,9 @@ function spawnServerProjectile(room, player, action, weaponId) {
   const len = Math.hypot(baseDx, baseDy, baseDz) || 1;
   const ndx = baseDx / len, ndy = baseDy / len, ndz = baseDz / len;
   const speed = weaponId === 'grenade' ? 17 : (w.speed || 26);
-  const proj = { id: game.nextProjectileId++, kind: weaponId, ownerId: player.id, x: sx + ndx * .85, y: sy, z: sz + ndz * .85, vx: ndx * speed, vy: weaponId === 'grenade' ? 4.8 : ndy * speed, vz: ndz * speed, life: weaponId === 'grenade' ? 1.15 : 2.25, radius: w.radius * (weaponId==='rocket' && player.upgrades.rocketPayload?1.18:1), damage: (w.damage || 80) * (player.upgrades?.damage || 1), alive: true };
+  const thrown=weaponId==='molotov';
+  const proj = { id: game.nextProjectileId++, kind: weaponId, ownerId: player.id, x: sx + ndx * .85, y: sy, z: sz + ndz * .85, vx: ndx * speed, vy: weaponId === 'grenade' ? 4.8 : thrown?4.5+ndy*speed*.6:ndy * speed, vz: ndz * speed, life: weaponId === 'grenade' ? 1.15 : thrown?3.2:2.25,firePower:player.upgrades?.damage || 1, radius: w.radius * (weaponId==='rocket' && player.upgrades.rocketPayload?1.18:1), damage: (w.damage || 80) * (player.upgrades?.damage || 1), alive: true };
+  if(!hasLineOfSightGame(game,sx,sz,proj.x,proj.z)||rectCollidesGame(game,proj.x,proj.z,.25)){proj.x=sx;proj.z=sz;proj.life=.001;}
   game.projectiles.push(proj);
   game.events.push({ type: 'projectileCreate', projectile: { id: proj.id, kind: proj.kind, ownerId: proj.ownerId, x: proj.x, y: proj.y, z: proj.z, vx: proj.vx, vy: proj.vy, vz: proj.vz } });
 }
@@ -515,16 +537,19 @@ function updateServerProjectiles(room, dt) {
       const h=dt/steps,nx=p.x+p.vx*h,nz=p.z+p.vz*h;
       if(rectCollidesGame(game,nx,nz,.25)){detonate=true;break;}
       p.x=nx;p.z=nz;
-      if(p.kind==='grenade')p.vy-=9.8*h;
+      if(p.kind==='grenade'||p.kind==='molotov')p.vy-=9.8*h;
       p.y+=p.vy*h;
       if(p.y<.35){p.y=.35;if(p.kind==='grenade'){p.vy*= -.42;p.vx*=.82;p.vz*=.82;}else detonate=true;}
       if(p.kind==='fireball' && [...room.players.values()].some(ply=>ply.state.alive && Math.hypot(ply.state.x-p.x,ply.state.z-p.z)<.8 && Math.abs((ply.state.y||0)+.9-p.y)<1))detonate=true;
-      if(p.kind==='rocket' && game.enemies.some(e=>e.alive && dist2(p.x,p.z,e.x,e.z)<Math.pow((e.radius || .5)+.38,2)))detonate=true;
+      if((p.kind==='rocket'||p.kind==='molotov') && p.y<2.2 && game.enemies.some(e=>e.alive && dist2(p.x,p.z,e.x,e.z)<Math.pow((e.radius || .5)+.38,2)))detonate=true;
     }
     if (detonate) {
       p.alive = false;
       if(p.kind==='fireball'){for(const player of room.players.values()){const d=Math.hypot(player.state.x-p.x,player.state.z-p.z);if(d<=p.radius && hasLineOfSightGame(game,p.x,p.z,player.state.x,player.state.z))damageServerPlayer(game,player,p.damage*(1-d/p.radius*.55),'devilFireball',{x:p.x,z:p.z});}for(const w of activeWalls(game))if(Math.hypot(w.x-p.x,w.z-p.z)<3)damageServerWall(game,w,34,'devilFireball');}
-      else applyExplosionDamage(room, p.x, p.z, p.radius || 5.5, p.damage || 90, p.kind, p.ownerId);
+      else if(p.kind==='molotov'){
+        if(game.firePatches.length>=FIRE_RULES.maxPatches)game.firePatches.shift();
+        game.firePatches.push(makeFirePatch(game.nextFireId++,p.x,p.z,p.ownerId,p.firePower));
+      }else applyExplosionDamage(room, p.x, p.z, p.radius || 5.5, p.damage || 90, p.kind, p.ownerId);
       game.events.push({ type: 'projectileExplode', projectileId: p.id, kind: p.kind, ownerId: p.ownerId, x: p.x, y: p.y, z: p.z, radius: p.radius });
     }
   }
@@ -532,8 +557,8 @@ function updateServerProjectiles(room, dt) {
 }
 function applyFire(room,player,action) {
   const game=room.game;if(!game || game.phase!=='combat' || game.suspended || !player.state.alive)return;
-  const wid=action.weapon,w=WEAPONS[wid];if(!w || !['hitscan','rail','grenade','rocket'].includes(w.type) || !consumeServerAmmo(room,player,wid))return;
-  if(w.type==='grenade' || w.type==='rocket'){spawnServerProjectile(room,player,action,wid);game.events.push({type:'serverFire',playerId:player.id,weapon:wid,weaponState:weaponPublicState(player)});return;}
+  const wid=action.weapon,w=WEAPONS[wid];if(!w || !['hitscan','rail','grenade','rocket','molotov'].includes(w.type) || !consumeServerAmmo(room,player,wid))return false;
+  if(['grenade','rocket','molotov'].includes(w.type)){spawnServerProjectile(room,player,action,wid);game.events.push({type:'serverFire',playerId:player.id,weapon:wid,weaponState:weaponPublicState(player)});return true;}
   const sx=player.state.x,sy=1.68+(player.state.y || 0),sz=player.state.z,yaw=action.yaw,pitch=action.pitch;
   for(let pellet=0;pellet<(w.pellets || 1);pellet++){
     const spread=(w.spread || 0)*(action.ads?.34:1.85);const ya=yaw+(Math.random()-.5)*spread,pi=pitch+(Math.random()-.5)*spread;
@@ -555,6 +580,18 @@ function applyFire(room,player,action) {
     if(wall)damageServerWall(game,wall.wall,w.damage*(wid==='shotgun' && player.upgrades.shotgunBreach?1.65:1),'bullet');
   }
   game.events.push({type:'serverFire',playerId:player.id,weapon:wid,weaponState:weaponPublicState(player)});
+  return true;
+}
+
+function updateServerFire(room,dt) {
+  const g=room.game,clear=(ax,az,bx,bz)=>hasLineOfSightGame(g,ax,az,bx,bz);
+  for(const f of g.firePatches)f.life-=dt;
+  g.firePatches=g.firePatches.filter(f=>f.life>0);
+  g.fireTick+=dt;if(g.fireTick<FIRE_RULES.tick)return;
+  const step=g.fireTick;g.fireTick=0;
+  for(const e of g.enemies){if(!e.alive)continue;const damage=tickBurning(e,g.firePatches,step,clear);if(damage){e.hp-=damage;if(e.hp<=0)killServerEnemy(room,e,'fire',e.burnOwnerId);}}
+  for(const c of g.cores){if(!c.alive)continue;const f=strongestFireAt(g.firePatches,c,clear);if(f)damageCore(g,c,f.dps*step);}
+  for(const p of room.players.values()){if(!p.state.alive)continue;const f=strongestFireAt(g.firePatches,{...p.state,id:p.id},clear,true);if(f)damageServerPlayer(g,p,FIRE_RULES.selfDps*step,'fire',f);}
 }
 
 
@@ -601,6 +638,7 @@ function handlePlaceMine(room, player, action) {
 }
 
 function startServerReward(room) {
+  room.game.firePatches=[];room.game.projectiles=[];
   const g=room.game;if(!g || g.phase==='reward')return;
   g.phase='reward';g.spawnQueue=0;g.projectiles=[];for(const e of g.enemies)e.alive=false;g.cores=[];
   const bonus=g.missionState.bonusComplete?g.mission.bonusScore:0;g.score+=g.mission.completionScore+bonus;g.missionsCleared++;if(bonus)g.bonusesCleared++;
@@ -697,7 +735,7 @@ function updateGame(room,dt) {
     if(g.prepTimer<=0 || players.every(p=>g.prepVotes[p.id])){g.phase='combat';g.wave++;setupServerMission(g);for(const p of players){for(const [id,w]of Object.entries(WEAPONS))if(w.unlockWave===g.wave && Number.isFinite(w.ammoMax))p.weaponState.ammo[id]=Math.max(ammoNumber(p.weaponState.ammo[id]),Math.ceil(w.ammoMax*.35));}g.events.push({type:'waveStart',wave:g.wave});}
   }else{
     if(g.spawnQueue>0){g.spawnTimer-=dt;if(g.spawnTimer<=0 && g.enemies.filter(e=>e.alive).length<Math.min(48,g.mission.maxActive+8)){if(spawnEnemy(g,room))g.spawnQueue--;g.spawnTimer=clamp((.74-g.wave*.015)*(g.map.spawnIntervalScale || 1),.2,.75);}}
-    updateEnemies(room,dt);updateServerProjectiles(room,dt);updateMinesAndWalls(room);updateServerItems(room,dt);
+    updateEnemies(room,dt);updateServerProjectiles(room,dt);updateServerFire(room,dt);updateMinesAndWalls(room);updateServerItems(room,dt);
     if(players.every(p=>p.state.downed || p.state.hp<=0)){endRoomRun(room,'defeated');return;}
     const done=tickMission(g.mission,g.missionState,dt,{players:players.map(p=>({...p.state,connected:p.connected,interact:!!p.input.flags.interact})),remaining:g.spawnQueue+g.enemies.filter(e=>e.alive).length,coresLeft:g.cores.filter(c=>c.alive).length,headshots:g.headshots,canInteract:(p,t)=>hasLineOfSightGame(g,p.x,p.z,t.x,t.z)});
     if(done)startServerReward(room);
@@ -710,8 +748,8 @@ function snapshotRoom(room,consume=true) {
   const g=room.game;return{roomCode:room.roomCode,phase:room.phase,serverTime:Date.now(),
     players:[...room.players.values()].map(p=>({id:p.id,role:p.role,connected:p.connected,state:{...p.state,upgrades:p.upgrades,weaponState:weaponPublicState(p),reviveProgress:p.assist?.time || 0}})),
     game:g?{id:g.id,wave:g.wave,spawnQueue:g.spawnQueue,initialCount:g.initialCount,phase:g.phase,prepTimer:g.prepTimer,prepReadyCount:Object.keys(g.prepVotes).length,score:g.score,kills:g.kills,headshots:g.headshots,mapId:g.mapId,diffId:g.diffId,reward:g.reward,mission:g.mission,missionState:g.missionState,elapsed:g.elapsed,suspended:g.suspended,waitingSeconds:Math.max(0,...[...room.players.values()].filter(p=>!p.connected).map(p=>Math.ceil((120000-Date.now()+p.disconnectedAt)/1000))),missionsCleared:g.missionsCleared,bonusesCleared:g.bonusesCleared,outcome:g.outcome}:null,
-    enemies:g?g.enemies.map(e=>({id:e.id,type:e.type,x:e.x,z:e.z,yaw:e.yaw,hp:Math.max(0,e.hp),maxHp:e.maxHp,alive:e.alive,elite:e.elite,targetPlayerId:e.targetPlayerId,lastHitPart:e.lastHitPart})):[],
-    cores:g?g.cores.map(c=>({...c})):[],placeables:g?g.placeables.filter(p=>p.alive):[],items:g?g.items.filter(i=>i.alive):[],projectiles:g?g.projectiles.filter(p=>p.alive):[],events:g?(consume?g.events.splice(0,150):[]):[]};
+    enemies:g?g.enemies.map(e=>({id:e.id,type:e.type,personalitySeed:e.personalitySeed,burnRemaining:e.burnRemaining || 0,x:e.x,z:e.z,yaw:e.yaw,hp:Math.max(0,e.hp),maxHp:e.maxHp,alive:e.alive,elite:e.elite,targetPlayerId:e.targetPlayerId,lastHitPart:e.lastHitPart})):[],
+    firePatches:g?g.firePatches.map(f=>({...f})):[],cores:g?g.cores.map(c=>({...c})):[],placeables:g?g.placeables.filter(p=>p.alive):[],items:g?g.items.filter(i=>i.alive):[],projectiles:g?g.projectiles.filter(p=>p.alive):[],events:g?(consume?g.events.splice(0,150):[]):[]};
 }
 
 
@@ -740,7 +778,9 @@ function updateServerAssist(room,dt){for(const healer of room.players.values()){
 }}
 function endRoomRun(room,outcome){if(!room.game || room.game.phase==='gameover')return;room.game.phase='gameover';room.game.outcome=outcome;room.game.suspended=false;room.game.events.push({type:'teamWipe',outcome});}
 
+io.use((socket,next)=>{if(socket.handshake.auth?.protocol!==undefined && socket.handshake.auth.protocol!==PROTOCOL_VERSION){const e=new Error('Game/server version mismatch');e.data={versionMismatch:true};return next(e);}next();});
 io.on('connection',socket=>{
+  socket.emit('serverInfo',connectionInfo(socket));
   socket.data.roomCode=null;
   socket.data.playerToken=makeToken(socket.handshake.auth?.playerToken);
   let bucketAt=Date.now(),messages=0;
@@ -822,15 +862,16 @@ io.on('connection',socket=>{
     if(type==='skipPrep' && g.phase==='prep'){g.prepVotes[p.id]=true;return;}
     if(!p.state.alive || !['combat','prep'].includes(g.phase))return;
     const weapon=Object.hasOwn(WEAPONS,payload.weapon)?payload.weapon:'pistol';
-    const action={actionType:type,weapon,yaw:n(payload.look?.yaw,p.state.yaw,-1e5,1e5),pitch:n(payload.look?.pitch,p.state.pitch,-1.18,1.10),x:p.state.x,y:p.state.y,z:p.state.z,ads:!!payload.ads};
-    if(type==='fire')applyFire(room,p,action);
+    const action={actionType:type,weapon,yaw:n(payload.look?.yaw,p.state.yaw,-1e5,1e5),pitch:n(payload.look?.pitch,p.state.pitch,-1.18,1.10),x:p.state.x,y:p.state.y,z:p.state.z,ads:!!payload.ads,alt:!!payload.alt};
+    let accepted=true;
+    if(type==='fire')accepted=applyFire(room,p,action);
     else if(type==='reloadStart')startServerReload(room,p,weapon);
     else if(type==='reloadCancel')cancelServerReload(room,p,weapon);
     else if(type==='placeWall')handlePlaceWall(room,p,{...action,placement:payload.placement || {}});
     else if(type==='placeMine')handlePlaceMine(room,p,{...action,placement:payload.placement || {}});
     else if(type==='useMedkit')healServerPlayer(g,p,p,25,'self');
     else if(type==='assistAlly')handleAssistAlly(room,p,payload);
-    if(['fire','reloadStart','placeWall','placeMine'].includes(type))socket.to(room.roomCode).emit('remoteAction',{playerId:p.id,action});
+    if(accepted && ['fire','reloadStart','placeWall','placeMine'].includes(type))socket.to(room.roomCode).emit('remoteAction',{playerId:p.id,action});
   });
   socket.on('latencyPing',(payload,ack)=>{if(typeof ack==='function')ack({ok:true,serverTime:Date.now()});});
   socket.on('disconnect',()=>leaveCurrentRoom(socket,{soft:true}));
@@ -851,7 +892,7 @@ intervals.push(setInterval(()=>{
 },1000));
 
 return {
-  app,io,rooms,httpServer,
+  app,io,rooms,httpServer,connectionInfo,
   tick:updateGame,snapshot:snapshotRoom,
   async start(){return new Promise((resolve,reject)=>{httpServer.once('error',reject);httpServer.listen(port,host,()=>{httpServer.removeListener('error',reject);resolve(httpServer.address());});});},
   async stop(){for(const interval of intervals)clearInterval(interval);for(const room of rooms.values())room.game=null;await new Promise(resolve=>io.close(resolve));}
@@ -862,5 +903,8 @@ return {
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const server=createGameServer();const address=await server.start();
   console.log(`BOXHEAD CO-OP · http://localhost:${address.port}`);
+  for(const url of server.connectionInfo().lanUrls)console.log(`Same Wi-Fi / LAN: ${url}`);
+  if(server.connectionInfo().publicUrl)console.log(`Internet: ${server.connectionInfo().publicUrl}`);
+  console.log('Both players: Online co-op > Create / Join room > Ready > Host starts.');
   for(const signal of ['SIGINT','SIGTERM'])process.once(signal,async()=>{await server.stop();process.exit(0);});
 }

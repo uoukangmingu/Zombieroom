@@ -38,7 +38,7 @@ export class Navigation {
     const target=this.closest(x,z,true);if(this.flows.has(target))return this.flows.get(target);
     const distance=new Int32Array(this.walk.length).fill(-1),q=[target];distance[target]=0;
     for(let i=0;i<q.length;i++)for(const n of this.edges[q[i]])if(distance[n]<0){distance[n]=distance[q[i]]+1;q.push(n);}
-    if(this.flows.size>=6)this.flows.delete(this.flows.keys().next().value);this.flows.set(target,distance);return distance;
+    if(this.flows.size>=24)this.flows.delete(this.flows.keys().next().value);this.flows.set(target,distance);return distance;
   }
   direction(x,z,tx,tz) {
     if(this.clear({x,z},{x:tx,z:tz},.8)){const len=Math.hypot(tx-x,tz-z)||1;return{x:(tx-x)/len,z:(tz-z)/len};}

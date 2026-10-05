@@ -6,5 +6,5 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 fs.mkdirSync(path.join(root,'client/vendor'),{recursive:true});
 fs.copyFileSync(path.join(root,'node_modules/socket.io/client-dist/socket.io.esm.min.js'),path.join(root,'client/vendor/socket.io.js'));
 await build({entryPoints:[path.join(root,'client/game.js')],bundle:true,format:'iife',platform:'browser',target:['chrome90','edge90','firefox88'],minify:true,legalComments:'eof',outfile:path.join(root,'client/game.bundle.js')});
-fs.writeFileSync(path.join(root,'client/version.json'),JSON.stringify({build:'1.1.0',protocol:4,name:'BOXHEAD BACKROOM CO-OP'})+'\n');
-console.log('BOXHEAD 1.1.0: standalone browser bundle built');
+fs.writeFileSync(path.join(root,'client/version.json'),JSON.stringify({build:'1.2.0',protocol:5,name:'BOXHEAD BACKROOM CO-OP'})+'\n');
+console.log('BOXHEAD 1.2.0: standalone browser bundle built');

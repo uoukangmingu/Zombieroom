@@ -1,4 +1,6 @@
 import {io} from './vendor/socket.io.js';
+import {PROTOCOL_VERSION} from '../shared/version.js';
+import {normalizeServerUrl,inviteUrl} from '../shared/connection.js';
 
 export class NetAdapter {
   constructor(game, ui) {
@@ -6,8 +8,11 @@ export class NetAdapter {
     this.socket=null; this.room=null; this.pingMs=null; this.lastInputAt=0; this.seq=0;
     try { this.session=JSON.parse(sessionStorage.getItem('boxhead_session_v1') || 'null'); } catch { this.session=null; }
     this.playerToken=this.session?.token || ('p_'+(globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)+Date.now()));
-    this.serverUrl=String(new URLSearchParams(location.search).get('server') || window.BHFPS_CONFIG?.SERVER_URL || '').trim().replace(/\/$/,'');
-    this.serverUrl=this.serverUrl && /^https?:\/\//.test(this.serverUrl) ? this.serverUrl : '';
+    let saved='';try{saved=localStorage.getItem('boxhead_server_url') || '';}catch{}
+    const requested=new URLSearchParams(location.search).get('server') || window.BHFPS_CONFIG?.SERVER_URL;
+    try{this.serverUrl=normalizeServerUrl(requested || (location.protocol==='file:'?(saved || 'http://localhost:3000'):location.origin));}catch{this.serverUrl=location.protocol==='file:'?'http://localhost:3000':location.origin;}
+    if(this.session?.serverUrl && this.session.serverUrl!==this.serverUrl)this.clearSession();
+    this.serverInfo={};if(ui.serverAddress)ui.serverAddress.value=this.serverUrl;
     this.inputTimer=setInterval(()=>this.sendInput(),33);
   }
 
@@ -36,21 +41,28 @@ export class NetAdapter {
     this.socket=io(this.serverUrl || location.origin,{
       transports:window.BHFPS_CONFIG?.FORCE_WEBSOCKET?['websocket']:['websocket','polling'],
       timeout:6000,reconnection:true,reconnectionDelay:500,reconnectionDelayMax:4000,
-      auth:{playerToken:this.playerToken}
+      auth:{playerToken:this.playerToken,protocol:PROTOCOL_VERSION}
     });
     this.socket.on('connect',()=>{
-      this.connected=true;this.enabled=true;this.seq=0;
-      this.status('connected','방을 만들거나 친구의 6자리 코드로 입장하세요.');
-      this.startPingLoop();
-      const code=this.pendingJoin || this.session?.roomCode || this.game.lobby.roomCode;
-      if(code){this.pendingJoin=null;this.socket.emit('joinRoom',{roomCode:code,playerToken:this.playerToken,reconnect:true});}
+      this.connected=false;this.enabled=false;this.seq=0;
+      this.status('offline','서버 버전을 확인하고 있습니다…');
+      clearTimeout(this.handshakeTimer);this.handshakeTimer=setTimeout(()=>{this.socket.disconnect();this.status('error','최신 서버인지 확인하세요. 새 압축본으로 서버를 재시작해야 합니다.');},5000);
     });
     this.socket.on('disconnect',()=>{
-      this.connected=false;this.pingMs=null;clearInterval(this.pingTimer);
+      this.connected=false;this.pingMs=null;clearInterval(this.pingTimer);clearTimeout(this.handshakeTimer);
       this.status('offline','연결이 끊겨 자동으로 다시 연결하고 있습니다.');
       if(this.game.running && this.game.lobby.mode==='coop')this.game.setConnectionBlocked(true,'연결 복구 중','서버에 다시 연결하고 있습니다. 게임 진행은 잠시 대기합니다.');
     });
-    this.socket.on('connect_error',()=>{this.connected=false;this.status('error','서버에 연결할 수 없습니다. 같은 서버 주소로 접속했는지 확인하세요.');});
+    this.socket.on('connect_error',err=>{this.connected=false;this.status('error',err?.data?.versionMismatch?'서버와 게임 버전이 다릅니다. 최신 압축본으로 서버를 재시작하세요.':'서버에 연결할 수 없습니다. 서버 실행 여부와 주소를 확인하세요.');});
+    this.socket.on('serverInfo',info=>{
+      clearTimeout(this.handshakeTimer);
+      if(info.protocol!==PROTOCOL_VERSION){this.socket.disconnect();this.status('error','서버와 게임 버전이 다릅니다. 최신 압축본으로 서버를 재시작하세요.');return;}
+      this.serverInfo=info;this.connected=true;this.enabled=true;
+      if(this.ui.connectionHelp)this.ui.connectionHelp.textContent=`서버 ${info.version} · 친구도 같은 서버에 접속해야 합니다.`;
+      this.status('connected','방을 만들거나 친구의 6자리 코드로 입장하세요.');this.startPingLoop();
+      const code=this.pendingJoin || this.session?.roomCode || this.game.lobby.roomCode;
+      if(code){this.pendingJoin=null;this.socket.emit('joinRoom',{roomCode:code,playerToken:this.playerToken,reconnect:true});}
+    });
     for(const event of ['roomCreated','roomJoined','lobbyUpdate'])this.socket.on(event,p=>this.applyRoom(p));
     this.socket.on('lobbyError',p=>{
       this.game.updateLobbyUI(p?.message || '방 요청에 실패했습니다.');
@@ -71,7 +83,7 @@ export class NetAdapter {
     const me=room.players.find(p=>p.id===this.socket?.id);
     const other=room.players.find(p=>p.id!==this.socket?.id);
     this.game.lobby={mode:'coop',role:me?.role || 'guest',roomCode:room.roomCode,ready:!!me?.ready,remoteReady:!!other?.ready,remoteSeen:!!other,remoteConnected:!!other?.connected,playerId:this.socket?.id};
-    this.session={token:this.playerToken,roomCode:room.roomCode};
+    this.session={token:this.playerToken,roomCode:room.roomCode,serverUrl:this.serverUrl};
     try{sessionStorage.setItem('boxhead_session_v1',JSON.stringify(this.session));}catch{}
     this.game.setPlayMode('coop');
     if(this.ui.roomCodeInput)this.ui.roomCodeInput.value=room.roomCode;
@@ -98,6 +110,19 @@ export class NetAdapter {
   }
 
   clearSession(){this.session=null;try{sessionStorage.removeItem('boxhead_session_v1');}catch{}}
+  setServerUrl(value) {
+    if(this.game.lobby.roomCode){this.game.showToast('방에서 나간 뒤 서버를 변경하세요.');return false;}
+    try{
+      const url=normalizeServerUrl(value);
+      if(location.protocol==='https:' && new URL(url).protocol!=='https:')throw new Error('HTTPS 게임 화면에서는 HTTPS 서버 주소를 사용하세요.');
+      this.socket?.removeAllListeners();this.socket?.disconnect();this.socket=null;clearInterval(this.pingTimer);clearTimeout(this.handshakeTimer);
+      this.connected=false;this.enabled=false;this.room=null;this.pendingJoin=null;this.serverInfo={};this.clearSession();this.serverUrl=url;
+      try{localStorage.setItem('boxhead_server_url',url);}catch{}
+      if(this.ui.serverAddress)this.ui.serverAddress.value=url;
+      this.connect();return true;
+    }catch(e){this.status('error',e.message || '서버 주소를 확인하세요.');return false;}
+  }
+  inviteUrl(code){return inviteUrl(this.serverUrl,code,this.serverInfo);}
   createRoom(settings){if(!this.connected){this.connect();this.game.updateLobbyUI('서버 연결 후 방 만들기를 눌러주세요.');return false;}this.socket.emit('createRoom',{settings,playerToken:this.playerToken});return true;}
   joinRoom(code){if(!this.connected){this.pendingJoin=code;this.connect();return true;}this.socket.emit('joinRoom',{roomCode:code,playerToken:this.playerToken});return true;}
   setReady(ready){if(!this.connected)return false;this.socket.emit('setReady',{roomCode:this.game.lobby.roomCode,ready});return true;}

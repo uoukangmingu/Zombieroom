@@ -11,7 +11,7 @@ const flush=s=>new Promise((resolve,reject)=>s.timeout(2000).emit('latencyPing',
 async function harness(t,settings={}){
  const server=createGameServer({port:0,host:'127.0.0.1',autoTick:false});const a=await server.start(),url=`http://127.0.0.1:${a.port}`;const sockets=[];
  t.after(async()=>{sockets.forEach(s=>s.disconnect());await server.stop()});
- const connect=async(token=randomUUID())=>{const s=io(url,{transports:['websocket'],reconnection:false,auth:{playerToken:token}});s.token=token;s.seq=0;sockets.push(s);await event(s,'connect');return s;};
+ const connect=async(token=randomUUID())=>{const s=io(url,{transports:['websocket'],reconnection:false,auth:{playerToken:token,protocol:5}});s.token=token;s.seq=0;sockets.push(s);await event(s,'connect');return s;};
  const host=await connect(),guest=await connect();let p=event(host,'roomCreated');host.emit('createRoom',{settings});const code=(await p).room.roomCode;
  p=event(guest,'roomJoined');guest.emit('joinRoom',{roomCode:code});await p;const room=server.rooms.get(code);
  const send=async(s,name,p={})=>{s.emit(name,{roomCode:code,seq:++s.seq,...p});await flush(s)};
@@ -95,4 +95,65 @@ test('reconnect timeout returns a clear outcome and permits lobby recovery',asyn
  guest.disconnect();await new Promise(resolve=>server.io.of('/').sockets.get(id)?.once('disconnect',resolve)||resolve());player.disconnectedAt=Date.now()-121000;h.tick(.1);
  assert.equal(room.game.outcome,'connection-timeout');assert.equal(room.game.suspended,false);assert.equal(room.players.size,1);
  await send(host,'returnToLobby');assert.equal(room.phase,'lobby');
+});
+
+test('Molotov is server authoritative: unlock, inventory, shared fire, owner damage, walls and reconnect',async t=>{
+ const h=await harness(t,{startWave:2}),{host,guest,room,action,send,server}=h;await h.start();const g=room.game;
+ g.spawnQueue=1;g.spawnTimer=999;g.enemies=[];
+ const p=room.players.get(host.id),q=room.players.get(guest.id);p.state.x=0;p.state.z=0;q.state.x=8;q.state.z=0;
+ p.motion.vx=p.motion.vz=q.motion.vx=q.motion.vz=0;p.input.keys=q.input.keys={};
+ const victim={id:800,type:'tank',x:0,z:-5,vx:0,vz:0,yaw:0,hp:300,maxHp:300,radius:.74,score:42,alive:true,speed:0,damage:1,attackCd:99};g.enemies=[victim];
+ const ammo=p.weaponState.ammo.molotov;let accepted=0;guest.on('remoteAction',v=>{if(v.action.weapon==='molotov')accepted++;});
+ g.wave=1;await action(host,'fire',{weapon:'molotov',look:{yaw:0,pitch:-.7}});assert.equal(g.projectiles.length,0);assert.equal(p.weaponState.ammo.molotov,ammo);assert.equal(accepted,0);
+ g.wave=2;await action(host,'fire',{weapon:'molotov',look:{yaw:0,pitch:-.7}});await action(host,'fire',{weapon:'molotov',look:{yaw:0,pitch:-.7}});
+ assert.equal(g.projectiles.length,1);assert.equal(p.weaponState.ammo.molotov,ammo-1);assert.equal(accepted,1,'rejected duplicate must not make a phantom remote throw');
+ for(let i=0;i<16 && !g.firePatches.length;i++)h.tick(.1);
+ assert.equal(g.firePatches.length,1);const f=g.firePatches[0];assert.ok(Math.hypot(f.x-victim.x,f.z-victim.z)<3.6);
+ for(let i=0;i<10;i++)h.tick(.1);assert.ok(victim.hp<290);assert.ok(victim.burnRemaining>0);
+ const shared=await Promise.all([event(host,'stateSnapshot'),event(guest,'stateSnapshot')]);
+ for(const s of shared){assert.equal(s.firePatches[0].id,f.id);assert.equal(s.enemies.find(e=>e.id===800).hp,victim.hp);}
+ p.state.x=f.x-.5;p.state.z=f.z;q.state.x=f.x+.6;q.state.z=f.z;const hp=p.state.hp,qhp=q.state.hp;h.tick(.21);
+ assert.ok(p.state.hp<hp);assert.equal(q.state.hp,qhp,'teammate fire must be harmless');
+ p.state.x=8;p.state.z=0;q.state.x=10;q.state.z=0;
+ g.firePatches=[];victim.burnRemaining=0;victim.x=0;victim.z=-4;victim.hp=300;
+ g.placeables=[{id:777,kind:'wall',x:0,z:-3,w:7,d:.45,hp:1000,maxHp:1000,alive:true}];
+ g.projectiles=[{id:900,kind:'molotov',ownerId:host.id,x:0,y:1.4,z:-1,vx:0,vy:-1,vz:-60,life:3,radius:3.6,firePower:1,alive:true}];h.tick(.1);
+ assert.equal(g.projectiles.length,0);assert.ok(g.firePatches[0].z>-3);for(let i=0;i<10;i++)h.tick(.1);assert.equal(victim.hp,300,'fire cannot burn through a wall');
+ const oldId=guest.id,token=guest.token;guest.disconnect();await new Promise(resolve=>server.io.of('/').sockets.get(oldId)?.once('disconnect',resolve)||resolve());h.tick(.1);
+ const life=g.firePatches[0].life;h.tick(1);assert.equal(g.firePatches[0].life,life,'disconnect must freeze fire');
+ const restored=await h.connect(token),joined=event(restored,'roomJoined');await send(restored,'joinRoom');const payload=await joined;
+ assert.equal(payload.snapshot.firePatches[0].life,life);assert.equal(payload.snapshot.firePatches[0].id,g.firePatches[0].id);
+ for(let i=0;i<80;i++)h.tick(.1);assert.equal(g.firePatches.length,0,'fire must expire');
+});
+
+test('a real server horde spreads out of a single column and still reaches its target',async t=>{
+ const h=await harness(t),{room,host,guest}=h;await h.start();const g=room.game;g.spawnQueue=1;g.spawnTimer=999;
+ const p=room.players.get(host.id),q=room.players.get(guest.id);p.state.x=0;p.state.z=0;q.state.x=10;q.state.z=6;
+ p.invulnerableUntil=q.invulnerableUntil=Date.now()+60000;
+ g.enemies=Array.from({length:14},(_,i)=>({id:100+i,personalitySeed:200+i,type:'zombie',x:0,z:-6-i*.8,vx:0,vz:0,yaw:0,hp:100,maxHp:100,radius:.48,score:10,alive:true,speed:2.45,damage:1,attackCd:0}));
+ let width=0;const arrived=new Set();
+ for(let step=0;step<350;step++){h.tick(.05);width=Math.max(width,Math.max(...g.enemies.map(e=>e.x))-Math.min(...g.enemies.map(e=>e.x)));for(const e of g.enemies)if(Math.hypot(e.x-p.state.x,e.z-p.state.z)<2.1)arrived.add(e.id);}
+ assert.ok(width>4,`horde remained in a column: ${width}`);assert.ok(arrived.size>=7,`only ${arrived.size} enemies closed on the player`);
+ assert.ok(new Set(g.enemies.map(e=>e.personality.style)).size>=4);
+ for(const e of g.enemies)assert.ok(!g.nav.collides(e.x,e.z,e.radius-.02),'personality movement crossed a map wall');
+});
+
+test('personality steering keeps routes usable across all five maps',async t=>{
+ for(const map of ['box','lane','castle','maze','abyss']){
+  const h=await harness(t,{map}),{room,host,guest}=h;await h.start();const g=room.game,p=room.players.get(host.id),q=room.players.get(guest.id);g.spawnQueue=1;g.spawnTimer=999;
+  p.invulnerableUntil=q.invulnerableUntil=Date.now()+60000;const target={x:p.state.x,z:p.state.z};
+  const points=[];for(let i=0;i<5;i++)points.push(g.nav.safePoint({from:target,minDistance:14,maxDistance:25,existing:points,clearance:1,random:()=>((i*13+5)%17)/17}));
+  g.enemies=points.map((v,i)=>({id:100+i,personalitySeed:900+i,type:'zombie',x:v.x,z:v.z,vx:0,vz:0,yaw:0,hp:100,maxHp:100,radius:.48,score:10,alive:true,speed:2.45,damage:1,attackCd:0}));
+  const reached=new Set();for(let i=0;i<3000 && reached.size<5;i++){h.tick(.05);for(const e of g.enemies){if(Math.min(Math.hypot(e.x-p.state.x,e.z-p.state.z),Math.hypot(e.x-q.state.x,e.z-q.state.z))<2.3)reached.add(e.id);}}
+  assert.equal(reached.size,5,`${map}: stuck enemies ${g.enemies.filter(e=>!reached.has(e.id)).map(e=>e.id)}`);
+ }
+});
+
+test('server handshake identifies the build and rejects incompatible clients',async t=>{
+ const server=createGameServer({port:0,host:'127.0.0.1',autoTick:false}),{port}=await server.start(),clients=[];
+ t.after(async()=>{for(const s of clients)s.disconnect();await server.stop();});
+ const bad=io(`http://127.0.0.1:${port}`,{transports:['websocket'],reconnection:false,auth:{protocol:4}});clients.push(bad);
+ const err=await event(bad,'connect_error');assert.equal(err.data.versionMismatch,true);assert.equal(server.rooms.size,0);
+ const good=io(`http://127.0.0.1:${port}`,{transports:['websocket'],reconnection:false,auth:{protocol:5}});clients.push(good);
+ const info=await event(good,'serverInfo');assert.equal(info.protocol,5);assert.equal(info.version,'1.2.0');assert.ok(Array.isArray(info.lanUrls));
 });

@@ -1,15 +1,18 @@
+import {approachPoint,personalSteering,personalPace,personalityOf} from '../shared/enemy-behavior.js';
+import {FIRE_RULES,makeFirePatch,strongestFireAt,tickBurning} from '../shared/fire.js';
 import {AudioBus} from './audio.js';
 import {NetAdapter} from './network.js';
 import {MAPS,MAP_KEYS as SURVIVAL_MAP_KEYS,DIFFICULTY,WEAPON_DEFS,enemyStats as getEnemyStats,pickEnemyType} from '../shared/arena.js';
 import {getMission,createMissionState,tickMission,missionProgress,missionHint,waveSpawnCount,MISSION_CATALOG} from '../shared/missions.js';
 import * as THREE from 'three';
 
-const GAME_BUILD = '1.1.0';
+const GAME_BUILD = '1.2.0';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
 
 const UI = {
+  serverAddress:$('server-address'),connectServerBtn:$('connect-server-button'),connectionHelp:$('connection-help'),inviteLink:$('invite-link'),
   loading: $('loading-screen'), loadingStatus: $('loading-status'), loadingBar: $('loading-bar'),
   start: $('start-screen'), pause: $('pause-screen'), over: $('game-over-screen'), 
   hud: $('hud'), startBtn: $('start-button'),  resumeBtn: $('resume-button'), restartBtn: $('restart-button'),
@@ -66,7 +69,7 @@ const DEFAULT_BINDINGS = Object.freeze({
   jump: 'Space', sprint: 'ShiftLeft', fire: 'Mouse0', aim: 'Mouse2',
   reload: 'KeyR', heal: 'KeyE', interact: 'KeyF',
   weapon1: 'Digit1', weapon2: 'Digit2', weapon3: 'Digit3', weapon4: 'Digit4',
-  weapon5: 'Digit5', weapon6: 'Digit6', weapon7: 'Digit7', weapon8: 'Digit8'
+  weapon5: 'Digit5', weapon6: 'Digit6', weapon7: 'Digit7', weapon8: 'Digit8', weapon9:'Digit9'
 });
 
 const BINDING_ACTIONS = [
@@ -74,7 +77,7 @@ const BINDING_ACTIONS = [
   ['jump','점프'], ['sprint','달리기'], ['fire','발사'], ['aim','정조준'],
   ['reload','재장전'], ['heal','회복·아군 지원'], ['interact','목표 상호작용'],
   ['weapon1','무기 1'], ['weapon2','무기 2'], ['weapon3','무기 3'], ['weapon4','무기 4'],
-  ['weapon5','무기 5'], ['weapon6','무기 6'], ['weapon7','무기 7'], ['weapon8','무기 8']
+  ['weapon5','무기 5'], ['weapon6','무기 6'], ['weapon7','무기 7'], ['weapon8','무기 8'], ['weapon9','화염병 9']
 ];
 
 const BINDING_NAMES = {
@@ -999,6 +1002,8 @@ class Game {
     if(UI.joinRoomBtn)UI.joinRoomBtn.disabled=!connected || inRoom;
     if(UI.leaveRoomBtn)UI.leaveRoomBtn.disabled=!inRoom;
     if(UI.copyInviteBtn)UI.copyInviteBtn.disabled=!inRoom;
+    if(UI.serverAddress)UI.serverAddress.disabled=inRoom;if(UI.connectServerBtn)UI.connectServerBtn.disabled=inRoom;
+    if(UI.inviteLink && !inRoom)UI.inviteLink.hidden=true;
     UI.startBtn.textContent=coop?(this.lobby.role==='guest'?'호스트 시작 대기':'협동 플레이 시작'):'싱글플레이 시작';
     UI.startBtn.disabled=coop && !this.canStartCoop();
     for(const select of [UI.map,UI.diff,UI.startWave])if(select)select.disabled=coop && inRoom && (this.lobby.role==='guest' || this.lobby.ready || this.net.room?.phase!=='lobby');
@@ -1282,6 +1287,9 @@ class Game {
     for(const id of ['sound-settings-start','sound-settings-pause'])$(id)?.addEventListener('click',()=>this.openSoundSettings());
     $('sound-settings-close')?.addEventListener('click',()=>this.closeSoundSettings());
     $('sound-test')?.addEventListener('click',async()=>{if(await this.audio.unlock()){this.audio.test();this.updateSoundStatus('왼쪽 → 오른쪽 → 발사 → 금속 타격 순서입니다.');}});
+    $('creature-sound-test')?.addEventListener('click',async()=>{if(await this.audio.unlock()){const type=$('creature-sound').value;this.audio.enemyVoice(type,'idle',37);this.updateSoundStatus($('creature-sound').selectedOptions[0].textContent);}});
+    UI.connectServerBtn?.addEventListener('click',()=>this.net.setServerUrl(UI.serverAddress.value));
+    UI.serverAddress?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();this.net.setServerUrl(UI.serverAddress.value);}});
     $('sound-reset')?.addEventListener('click',()=>{
       UI.masterVolume.value='100';UI.sfxVolume.value='85';UI.bgmVolume.value='65';UI.ambienceVolume.value='60';UI.soundMix.value='balanced';
       this.refreshVolumeLabels();this.syncSettingsFromMenu();this.savePreferences();this.updateSoundStatus('권장 음량으로 복원했습니다.');
@@ -1937,6 +1945,8 @@ class Game {
     };
 
     this.geos = {
+      bottle:new THREE.CylinderGeometry(.12,.135,.36,8),bottleNeck:new THREE.CylinderGeometry(.044,.06,.19,8),
+      flame:new THREE.PlaneGeometry(1,1),fireFloor:new THREE.CircleGeometry(1,24),
       floor: new THREE.PlaneGeometry(this.map.size, this.map.size, 1, 1),
       ceiling: new THREE.PlaneGeometry(this.map.size, this.map.size, 1, 1),
       wall: new THREE.BoxGeometry(1, WORLD.WALL_HEIGHT, 1),
@@ -1959,6 +1969,17 @@ class Game {
       bloodPatch: new THREE.BoxGeometry(1, 1, .018)
     };
     this.edgeCache = new Map();
+    this.materials.bottle=new THREE.MeshStandardMaterial({color:0x35542a,roughness:.22,metalness:.12});
+    this.materials.fireFloor=new THREE.MeshBasicMaterial({color:0x30160b,transparent:true,opacity:.55,depthWrite:false});
+    this.materials.flame=new THREE.ShaderMaterial({transparent:true,depthWrite:false,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,
+      uniforms:{time:{value:0}},vertexShader:`varying vec2 uv0;varying vec3 wp;void main(){uv0=uv;wp=(modelMatrix*vec4(position,1.)).xyz;gl_Position=projectionMatrix*viewMatrix*vec4(wp,1.);}`,
+      fragmentShader:`uniform float time;varying vec2 uv0;varying vec3 wp;
+      float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+      float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+      void main(){vec2 p=uv0;float n=noise(vec2(p.x*5.+wp.x,p.y*6.-time*3.+wp.z));float sway=sin(time*3.+p.y*5.+wp.x)*.07*p.y;
+      float shape=(1.-p.y)*.51-abs(p.x-.5+sway)+(n-.5)*.20;
+      float a=smoothstep(0.,.12,shape)*smoothstep(0.,.09,p.y)*(1.-p.y);
+      vec3 c=mix(vec3(1.,.10,.015),vec3(1.,.82,.25),clamp(shape*3.5,0.,1.));gl_FragColor=vec4(c,a*.9);}`});
     this.navGrid = null;
     this.navGrids = new Map();
     this.flowField = null;
@@ -2021,7 +2042,7 @@ class Game {
     this.waveBreak = 0; this.spawnQueue = 0; this.spawnTimer = 0;
     this.currentMission = null; this.missionTimer = 0; this.missionCompletePending = false; this.objectiveCores = [];
 
-    this.enemies = []; this.projectiles = []; this.pickups = []; this.fx = []; this.placeables = [];
+    this.enemies = []; this.projectiles = []; this.firePatches=[];this.nextFireId=1;this.fireTick=0;this.simTime=0;this.creatureVoiceTimer=0;this.fireSoundTimer=0; this.pickups = []; this.fx = []; this.placeables = [];
     this.serverEnemyAuthority = this.lobby.mode==='coop'; this._serverEnemyAuthorityStarted = false;
     this.networkItems=new Map();this.networkProjectiles=new Map();this.networkPlaceables=new Map();this.serverRewardMode=false;this.serverRewardChosen=false;this.lastServerRewardWave=null;this.serverExtractRequested=false;this._serverPositionSeen=false;
     this.remotePlayers = new Map();
@@ -2704,7 +2725,7 @@ class Game {
       }else{seen.add(p.id);this.applyRemoteInput(p.id,{...p.state,role:p.role});}
     }
     for(const id of this.remotePlayers.keys())if(!seen.has(id))this.removeRemotePlayer(id);
-    this.unlockWeapons();this.syncServerEnemies(payload.enemies || []);this.syncServerCores(payload.cores || []);this.syncServerPlaceables(payload.placeables || []);this.syncServerItems(payload.items || []);this.syncServerProjectiles(payload.projectiles || []);this.syncMissionTargets();
+    this.unlockWeapons();this.syncServerEnemies(payload.enemies || []);this.syncServerCores(payload.cores || []);this.syncServerPlaceables(payload.placeables || []);this.syncServerItems(payload.items || []);this.syncServerProjectiles(payload.projectiles || []);this.syncServerFire(payload.firePatches || []);this.syncMissionTargets();
     this.setConnectionBlocked(g.suspended,'친구가 다시 연결하고 있습니다',String(g.waitingSeconds || 120)+'초 동안 현재 진행을 보관합니다. 연결되면 이어서 플레이합니다.');
     if(g.phase==='reward' && g.reward){
       this.serverRewardMode=true;
@@ -2775,9 +2796,9 @@ class Game {
       const id = String(sp.id); seen.add(id);
       let rec = this.networkProjectiles.get(id);
       if (!rec) {
-        const kind = ['rocket','fireball'].includes(sp.kind) ? sp.kind : 'grenade';
-        const mesh = kind==='fireball'?this.createCasterOrb():new THREE.Mesh(this.geos.sphere, kind === 'rocket' ? this.materials.fire : this.materials.bullet);
-        if(kind!=='fireball')mesh.scale.setScalar(kind === 'rocket' ? .22 : .17);
+        const kind = ['rocket','fireball','molotov'].includes(sp.kind) ? sp.kind : 'grenade';
+        const mesh = kind==='fireball'?this.createCasterOrb():kind==='molotov'?this.createMolotovModel():new THREE.Mesh(this.geos.sphere, kind === 'rocket' ? this.materials.fire : this.materials.bullet);
+        if(kind!=='fireball'&&kind!=='molotov')mesh.scale.setScalar(kind === 'rocket' ? .22 : .17);
         mesh.position.set(Number(sp.x) || 0, Number(sp.y) || 1.4, Number(sp.z) || 0);
         this.scene.add(mesh);
         rec = { serverId: id, networked: true, kind, mesh, x: mesh.position.x, y: mesh.position.y, z: mesh.position.z, alive: true };
@@ -2803,7 +2824,7 @@ class Game {
     if(snapshot.elite)mesh.scale.setScalar(1.18);this.scene.add(mesh);
     const stats = this.enemyStats(type);
     return {
-      id: snapshot.id, serverId: snapshot.id, type, mesh, alive: true,
+      id: snapshot.id, serverId: snapshot.id, personalitySeed:snapshot.personalitySeed,type, mesh, alive: true,
       x: mesh.position.x, z: mesh.position.z, targetX: mesh.position.x, targetZ: mesh.position.z, yaw: mesh.rotation.y, targetYaw: mesh.rotation.y,elite:!!snapshot.elite,
       vx: 0, vz: 0, hp: Number(snapshot.hp) || stats.hp, maxHp: Number(snapshot.maxHp) || stats.hp,
       speed: stats.speed, radius: stats.radius, damage: stats.damage, score: stats.score,
@@ -2831,7 +2852,7 @@ class Game {
         this.enemies.push(e);
       }
       const wasAlive = e.alive;
-      e.type = s.type || e.type;
+      e.type = s.type || e.type;e.personalitySeed=s.personalitySeed;e.burnRemaining=s.burnRemaining || 0;
       e.targetX = Number.isFinite(s.x)?s.x:e.x;
       e.targetZ = Number.isFinite(s.z)?s.z:e.z;
       e.targetYaw = Number.isFinite(Number(s.yaw)) ? Number(s.yaw) : e.targetYaw;
@@ -2851,7 +2872,7 @@ class Game {
     if (deathFx && e.mesh?.parent) {
       this.spawnEnemyDeathDebris(e);
     }
-    if(deathFx&&!e.deathSoundPlayed){e.deathSoundPlayed=true;this.playWorldSound(e.x,e.z,()=>this.audio.enemyDeath(e.type));}
+    if(deathFx&&!e.deathSoundPlayed){e.deathSoundPlayed=true;this.playWorldSound(e.x,e.z,()=>this.audio.enemyDeath(e.type,e.personalitySeed || e.id));}
     e.alive = false;
     if (e.mesh?.parent) this.scene.remove(e.mesh);
   }
@@ -2895,7 +2916,7 @@ class Game {
       }
       if (ev.type === 'enemyMelee' && e) {
         e.attackAnim = e.attackMax = e.type === 'tank' ? .50 : .42;
-        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type));
+        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type,e.personalitySeed || e.id));
       }
       if (ev.type === 'devilCast' && e) {
         e.castAnim = e.castMax = .55;
@@ -2917,6 +2938,7 @@ class Game {
       if (ev.type === 'itemSpawn') this.audio.itemSpawn();
       if (ev.type === 'serverFire' && ev.playerId === this.net?.socket?.id && ev.weaponState) this.syncLocalWeaponState(ev.weaponState);
       if ((ev.type === 'reloadStart' || ev.type === 'reloadEnd' || ev.type === 'reloadCancel') && ev.playerId === this.net?.socket?.id && ev.weaponState) this.syncLocalWeaponState(ev.weaponState);
+      if (ev.type==='projectileExplode' && ev.kind==='molotov'){this.playWorldSound(ev.x,ev.z,()=>this.audio.molotovBreak());continue;}
       if (ev.type === 'projectileExplode') { this.explode(ev.x || 0, ev.z || 0, ev.radius || 5.5, 0, false); this.playWorldSound(ev.x,ev.z,()=>ev.kind==='fireball'?this.audio.fireballExplode():this.audio.explosion()); }
       if (ev.type === 'playerExplodeHit' && ev.playerId === this.net?.socket?.id) this.damagePlayer(Number(ev.amount || 1), { x: ev.x || this.player.x, z: ev.z || this.player.z - 1 }, 'explosion');
       if (ev.type === 'itemPickup') { if (ev.playerId === this.net?.socket?.id) { if (ev.weaponState) this.syncLocalWeaponState(ev.weaponState); this.showToast(ev.itemKind === 'health' ? '회복 상자 획득' : '탄약 상자 획득'); } this.audio.pickup(); }
@@ -2998,6 +3020,7 @@ class Game {
 
   showServerRewardChoices(choices = [], wave = this.wave) {
     this.serverRewardMode = true;
+    this.clearFirePatches();
     this.rewardOpen = true;
     this.prepPhase = false;
     this.prepTimer = 0;
@@ -3091,6 +3114,8 @@ class Game {
         ud.weaponGroup.rotation.z = r.reload ? -.16 : 0;
         const theme = this.weaponTheme(r.weapon);
         if (theme && r._weaponMaterialId !== r.weapon) {
+          if(ud.weaponGroup){if(ud.molotov)ud.weaponGroup.remove(ud.molotov);ud.molotov=null;if(r.weapon==='molotov'){ud.molotov=this.createMolotovModel();ud.molotov.position.set(0,.2,.1);ud.weaponGroup.add(ud.molotov);}}
+          for(const part of [ud.gunBody,ud.gunBarrel,ud.gunAccent])if(part)part.visible=r.weapon!=='molotov';
           if (ud.gunBody) ud.gunBody.material = theme.body;
           if (ud.gunBarrel) ud.gunBarrel.material = theme.barrel;
           if (ud.gunAccent) ud.gunAccent.material = theme.accent;
@@ -3158,6 +3183,7 @@ class Game {
     if (!this.viewWeapon || !this.viewWeaponBody || !this.viewWeaponBarrel) return;
     const w = this.getWeapon();
     const theme = this.weaponTheme(w.id);
+    this.viewWeaponBody.visible=w.id!=='molotov';this.viewWeaponBarrel.visible=w.id!=='molotov';
     this.viewWeaponBody.material = theme.body;
     this.viewWeaponBarrel.material = theme.barrel;
     const shape = {
@@ -3175,6 +3201,7 @@ class Game {
     this.viewWeaponBarrel.position.z = -shape[6];
 
     this.clearWeaponAttachments();
+    if(w.id==='molotov' && this.weaponAttachmentGroup){const bottle=this.createMolotovModel();bottle.scale.setScalar(1.5);bottle.position.set(0,-.16,-.28);bottle.rotation.z=-.16;this.weaponAttachmentGroup.add(bottle);return;}
     if (this.quality?.simpleModels) return;
     const a = this.weaponAttachmentGroup;
     if (!a) return;
@@ -3519,7 +3546,7 @@ class Game {
     this.scene.add(mesh);
     this.spawnEnemySpawnFx(sp.x, sp.z, type);
     this.enemies.push({
-      id: this.nextEnemyId++, type, mesh, alive: true,
+      personalitySeed:this.nextEnemyId+this.wave*9973,id: this.nextEnemyId++, type, mesh, alive: true,
       x: mesh.position.x, z: mesh.position.z, vx: 0, vz: 0,
       hp: stats.hp * (elite ? 2.35 : 1), maxHp: stats.hp * (elite ? 2.35 : 1), speed: stats.speed * (elite ? 1.08 : 1), radius: stats.radius * (elite ? 1.10 : 1),
       damage: stats.damage * (elite ? 1.32 : 1), score: stats.score * (elite ? 3 : 1), elite, attackCd: rand(.3, 1.2), meleeCd: rand(.25, .75), stun: 0,
@@ -3646,6 +3673,7 @@ class Game {
       return;
     }
     
+    this.simTime+=dt;
     this.updateReload(dt);
     this.mobile?.update(dt);
     this.handleInput(dt);
@@ -3661,6 +3689,8 @@ class Game {
     }
     if (!serverEnemyAuthority) this.updateRandomItemBoxes(dt);
     this.updateProjectiles(dt);
+    this.updateFirePatches(dt);
+    this.updateCreatureAudio(dt);
     this.updateObjectiveCores(dt);
     this.updatePickups(dt);
     this.updatePlaceables(dt);
@@ -3819,7 +3849,7 @@ class Game {
     this.pitch -= mouse.dy * 0.0017 * lookMul;
     this.pitch = clamp(this.pitch, -1.18, 1.10);
 
-    for (let i = 1; i <= 8; i++) {
+    for (let i = 1; i <= 9; i++) {
       if (this.input.consumeAction(`weapon${i}`)) { const w = WEAPON_DEFS.find(x => x.slot === i); if (w) this.selectWeapon(w.id); }
     }
     const wheel = this.input.consumeWheel();
@@ -4065,7 +4095,7 @@ class Game {
     this.cooldowns[w.id] = t + w.cooldown;
     const serverAuth = this.usesServerEnemyAuthority();
     let fired = true;
-    if (serverAuth && ['hitscan','rail','grenade','rocket'].includes(w.type)) {
+    if (serverAuth && ['hitscan','rail','grenade','rocket','molotov'].includes(w.type)) {
       const dir = this.aimDirection(w.spread || 0);
       if (w.type === 'hitscan' || w.type === 'rail') this.spawnBulletVisual(dir, w.range || 34, w.type === 'rail' ? .055 : (w.id === 'shotgun' ? .105 : .085), w.type === 'rail');
       else this.spawnMuzzleFlash(this.getMuzzleWorldPosition(), dir, false);
@@ -4075,6 +4105,7 @@ class Game {
       else if (w.type === 'rail') this.fireRail(w);
       else if (w.type === 'grenade') this.spawnProjectile('grenade', w, alt ? 11 : 17);
       else if (w.type === 'rocket') this.spawnProjectile('rocket', w, w.speed);
+      else if(w.type==='molotov')this.spawnProjectile('molotov',w,w.speed);
       else if (w.type === 'barrel') fired = this.placeBarrel();
       else if (w.type === 'wall') fired = this.placeWall();
     }
@@ -4400,7 +4431,7 @@ class Game {
     const weaponId = String(action.weapon || r.weapon || 'pistol');
     const dir = this.lookDirection(action.yaw ?? r.target?.yaw ?? r.yaw, action.pitch ?? r.target?.pitch ?? r.pitch);
     if (['grenade', 'rocket'].includes(weaponId)) this.spawnRemoteThrownVisual(r, dir, weaponId);
-    else if (weaponId !== 'wall' && weaponId !== 'barrel') this.spawnRemoteBulletVisual(r, dir, weaponId);
+    else if (weaponId !== 'wall' && weaponId !== 'barrel' && weaponId !== 'molotov') this.spawnRemoteBulletVisual(r, dir, weaponId);
     this.playWorldSound(r.target.x,r.target.z,()=>this.audio.shoot(weaponId));
   }
 
@@ -4481,13 +4512,87 @@ class Game {
 
   spawnProjectile(kind, w, speed) {
     const dir = this.aimDirection(kind === 'grenade' ? .035 : .006);
-    const mesh = new THREE.Mesh(this.geos.sphere, kind === 'rocket' ? this.materials.fire : this.materials.bullet);
+    const mesh = kind==='molotov'?this.createMolotovModel():new THREE.Mesh(this.geos.sphere, kind === 'rocket' ? this.materials.fire : this.materials.bullet);
     const start = this.getMuzzleWorldPosition();
+    if(!this.lineClear2D(this.player.x,this.player.z,start.x,start.z,.25)){start.x=this.player.x;start.z=this.player.z;}
     mesh.position.copy(start);
     this.applyShadows(mesh, true, false);
     this.scene.add(mesh);
     const payload = kind === 'rocket' && this.upgrades?.rocketPayload ? 1.18 : 1;
-    this.projectiles.push({ kind, mesh, x: mesh.position.x, z: mesh.position.z, y: mesh.position.y, vx: dir.x * speed, vz: dir.z * speed, vy: kind === 'grenade' ? 4.8 : dir.y * speed, life: kind === 'grenade' ? 1.15 : 2.2, radius: w.radius * payload, damage: w.damage * (this.upgrades?.damage || 1) });
+    this.projectiles.push({ kind, mesh, x: mesh.position.x, z: mesh.position.z, y: mesh.position.y, vx: dir.x * speed, vz: dir.z * speed, vy: kind === 'grenade' ? 4.8 : kind==='molotov'?4.5+dir.y*speed*.6:dir.y * speed, life: kind === 'grenade' ? 1.15 : kind==='molotov'?3.2:2.2, radius: w.radius * payload, damage: w.damage * (this.upgrades?.damage || 1) });
+  }
+
+  createMolotovModel() {
+    const g=new THREE.Group();
+    this.addPart(g,this.geos.bottle,this.materials.bottle,0,0,0,1,1,1);
+    this.addPart(g,this.geos.bottleNeck,this.materials.bottle,0,.27,0,1,1,1);
+    this.addPart(g,this.geos.lowBox,this.materials.gunYellowAccent,0,.12,.125,.19,.11,.01);
+    this.addPart(g,this.geos.lowBox,this.materials.iceBlue,.025,.39,0,.055,.13,.045,0,0,-.3);
+    const flame=new THREE.Mesh(this.geos.flame,this.materials.flame);flame.position.y=.57;flame.scale.set(.25,.4,1);g.add(flame);
+    return g;
+  }
+
+  createFireVisual(f) {
+    const group=new THREE.Group();group.position.set(f.x,.025,f.z);
+    const floor=new THREE.Mesh(this.geos.fireFloor,this.materials.fireFloor);floor.rotation.x=-Math.PI/2;floor.scale.setScalar(f.radius);group.add(floor);
+    const count=this.quality?.simpleModels?5:9;
+    for(let i=0;i<count;i++){
+      const angle=i*2.399+f.id,dist=i?f.radius*.77*Math.sqrt(i/count):0,x=Math.cos(angle)*dist,z=Math.sin(angle)*dist;
+      if(!this.lineClear2D(f.x,f.z,f.x+x,f.z+z,.08))continue;
+      for(let side=0;side<2;side++){const mesh=new THREE.Mesh(this.geos.flame,this.materials.flame);const height=1.25+Math.sin(i*8.1)*.28;mesh.position.set(x,height*.5,z);mesh.scale.set(1.45,height,1);mesh.rotation.y=angle+side*Math.PI/2;group.add(mesh);}
+    }
+    this.scene.add(group);return group;
+  }
+
+  igniteFire(x,z) {
+    if(this.firePatches.length>=FIRE_RULES.maxPatches)this.scene.remove(this.firePatches.shift().mesh);
+    const f=makeFirePatch(this.nextFireId++,x,z,'local',this.upgrades?.damage || 1);f.mesh=this.createFireVisual(f);this.firePatches.push(f);
+    this.playWorldSound(x,z,()=>this.audio.molotovBreak());
+  }
+
+  syncServerFire(list) {
+    const old=new Map(this.firePatches.map(f=>[f.id,f]));
+    this.firePatches=list.map(s=>{const f=old.get(s.id);old.delete(s.id);return {...s,networked:true,mesh:f?.mesh || this.createFireVisual(s)};});
+    for(const f of old.values())this.scene.remove(f.mesh);
+  }
+
+  clearFirePatches() {for(const f of this.firePatches || [])this.scene?.remove(f.mesh);this.firePatches=[];}
+
+  updateFirePatches(dt) {
+    const clear=(ax,az,bx,bz)=>this.lineClear2D(ax,az,bx,bz,.02);
+    if(!this.usesServerEnemyAuthority()){
+      for(const f of this.firePatches)f.life-=dt;
+      this.fireTick+=dt;
+      if(this.fireTick>=FIRE_RULES.tick){const step=this.fireTick;this.fireTick=0;
+        for(const e of this.enemies){if(!e.alive)continue;const damage=tickBurning(e,this.firePatches,step,clear);if(damage)this.damageEnemy(e,damage,'fire');}
+        for(const c of this.objectiveCores || []){if(!c.alive)continue;const f=strongestFireAt(this.firePatches,c,clear);if(f)this.damageObjectiveCore(c,f.dps*step,'fire');}
+        const f=strongestFireAt(this.firePatches,this.player,clear);if(f)this.damagePlayer(FIRE_RULES.selfDps*step,f,'fire');
+      }
+    }
+    this.firePatches=this.firePatches.filter(f=>{if(f.life<=0){this.scene.remove(f.mesh);return false;}f.mesh.scale.y=Math.min(1,f.life/.8);return true;});
+    this.materials.flame.uniforms.time.value=this.simTime;
+    for(const e of this.enemies){
+      if(!e.mesh)continue;
+      if(e.alive && e.burnRemaining>0 && !e.burnFx){const flame=new THREE.Mesh(this.geos.flame,this.materials.flame);flame.position.y=1.05;flame.scale.set(1.05,1.9,1);e.mesh.add(flame);e.burnFx=flame;}
+      if(e.burnFx){e.burnFx.visible=e.alive && e.burnRemaining>0;e.burnFx.rotation.y=this.yaw-e.mesh.rotation.y;}
+    }
+    this.fireSoundTimer-=dt;
+    if(this.fireSoundTimer<=0 && this.firePatches.length){
+      const nearest=this.firePatches.reduce((a,b)=>dist2(a.x,a.z,this.player.x,this.player.z)<dist2(b.x,b.z,this.player.x,this.player.z)?a:b);
+      if(dist2(nearest.x,nearest.z,this.player.x,this.player.z)<28*28)this.playWorldSound(nearest.x,nearest.z,()=>this.audio.fireCrackle());
+      this.fireSoundTimer=.26+Math.random()*.15;
+    }
+  }
+
+  updateCreatureAudio(dt) {
+    this.creatureVoiceTimer=Math.max(0,this.creatureVoiceTimer-dt);
+    for(const e of this.enemies){if(!e.alive)continue;
+      e.voiceTimer=(e.voiceTimer ?? (1+personalityOf(e).phase))-dt;
+      if(e.voiceTimer<=0 && this.creatureVoiceTimer<=0 && dist2(e.x,e.z,this.player.x,this.player.z)<26*26){
+        this.playWorldSound(e.x,e.z,()=>this.audio.enemyVoice(e.type,'idle',e.personalitySeed || e.id));
+        e.voiceTimer=3.5+personalityOf(e).phase;this.creatureVoiceTimer=.45;
+      }
+    }
   }
 
   createMineModel() {
@@ -4670,10 +4775,7 @@ class Game {
       // 현재 위치만 뒤쫓지 않고 짧게 이동 방향을 예측해 코너에서 추적이 느슨해지는 현상을 줄인다.
       let target = e.aiTarget || { x: this.player.x, z: this.player.z };
       if (thinkNow) {
-        const leadTime = clamp(d / 28, 0, .58);
-        const predictedX = this.player.x + (this.player.vx || 0) * leadTime;
-        const predictedZ = this.player.z + (this.player.vz || 0) * leadTime;
-        target = this.collides(predictedX, predictedZ, this.player.radius) ? { x: this.player.x, z: this.player.z } : { x: predictedX, z: predictedZ };
+        target=approachPoint(e,this.player,this.simTime,(ax,az,bx,bz,r)=>this.lineClear2D(ax,az,bx,bz,r));
         const routeRadius = Math.max(.62, e.radius + .12);
         if (!this.lineClear2D(e.x, e.z, target.x, target.z, routeRadius)) {
           target = this.getEnemyTacticalTarget(e, target.x, target.z, d);
@@ -4720,10 +4822,12 @@ class Game {
         e.kvz *= Math.exp(-dt * 9);
       }
       if (e.stun <= 0 && !wallAttack) {
-        const steer = thinkNow || !e.cachedSteer ? this.getEnemySteering(e, target.x, target.z, aiDt) : e.cachedSteer;
+        const base=thinkNow || !e.cachedSteer ? this.getEnemySteering(e,target.x,target.z,aiDt):null;
+        const steer=base?personalSteering(e,base,this.player,this.enemies,this.simTime,{clear:(ax,az,bx,bz,r)=>this.lineClear2D(ax,az,bx,bz,r),hazards:this.firePatches}):e.cachedSteer;
         e.cachedSteer = steer;
-        const targetVx = steer.x * e.speed;
-        const targetVz = steer.z * e.speed;
+        const pace=personalPace(e,this.simTime);
+        const targetVx = steer.x * e.speed * pace;
+        const targetVz = steer.z * e.speed * pace;
         const smooth = 1 - Math.exp(-dt * (steer.avoiding ? 11 : 8));
         e.vx += (targetVx - e.vx) * smooth;
         e.vz += (targetVz - e.vz) * smooth;
@@ -4746,13 +4850,13 @@ class Game {
         e.attackMax = e.attackAnim;
         e.stun = Math.max(e.stun || 0, .08);
         this.damagePlayer(e.damage * (e.type === 'runner' ? .46 : (e.type === 'tank' ? .72 : .60)), e, 'melee');
-        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type));
+        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type,e.personalitySeed || e.id));
       } else if (!playerWallBlocker && e.meleeCd <= 0 && e.type === 'devil' && (d < devilClawRange)) {
         e.meleeCd = 1.15;
         e.attackAnim = .40;
         e.attackMax = .40;
         this.damagePlayer(e.damage * .48, e, 'melee');
-        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type));
+        this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type,e.personalitySeed || e.id));
       }
       e.walkSpeed = Math.hypot(e.x - prevX, e.z - prevZ) / Math.max(.001, dt);
       const desiredSpeed = Math.hypot(e.vx || 0, e.vz || 0);
@@ -4897,7 +5001,7 @@ class Game {
     e.stun = Math.max(e.stun || 0, .10);
     const power = e.damage * (e.type === 'runner' ? .95 : (e.type === 'tank' ? 2.25 : 1.22)) * (e.wallPower || 1);
     this.damageWall(wall, power, 'claw', { x: p.x, y: 1.18, z: p.z });
-    this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type));
+    this.playWorldSound(e.x,e.z,()=>this.audio.enemyAttack(e.type,e.personalitySeed || e.id));
     return true;
   }
 
@@ -5692,6 +5796,7 @@ class Game {
       const endX = p.x + p.vx * dt, endZ = p.z + p.vz * dt;
       const hit = this.traceProjectileSegment(p, startX, startZ, endX, endZ);
       if (!hit) { p.x = endX; p.z = endZ; }
+      if(p.kind==='molotov'){p.vy-=9.8*dt;p.y+=p.vy*dt;if(p.y<=.35&&!p.dead){p.y=.35;this.detonateProjectile(p);}}
       if (p.kind === 'grenade') { p.vy -= 9.8 * dt; p.y += p.vy * dt; if (p.y < .35) { p.y = .35; p.vy *= -.42; p.vx *= .82; p.vz *= .82; } }
       p.mesh.position.set(p.x, p.y, p.z);
       p.mesh.rotation.x += dt * 8; p.mesh.rotation.y += dt * 6;
@@ -5714,7 +5819,7 @@ class Game {
       const z = startZ + (endZ - startZ) * t;
       const wall = this.getObstacleAt(x, z, .24);
       if (wall) {
-        p.x = x; p.z = z;
+        p.x=startX+(endX-startX)*(i-1)/steps;p.z=startZ+(endZ-startZ)*(i-1)/steps;
         if (p.kind === 'fireball') this.damageWall(wall, 34, 'fireball', { x, y: p.y, z });
         this.detonateProjectile(p);
         return { kind: 'wall', wall, x, z };
@@ -5728,7 +5833,7 @@ class Game {
       if (p.kind === 'fireball') {
 
       }
-      if (p.kind === 'rocket') {
+      if (p.kind === 'rocket' || (p.kind==='molotov' && p.y<2.2)) {
         const enemy = this.enemies.find(e => e.alive && dist2(x, z, e.x, e.z) < (e.radius + .35) ** 2);
         if (enemy) {
           p.x = x; p.z = z;
@@ -5744,6 +5849,7 @@ class Game {
     if (p.dead) return;
     p.dead = true;
     if (p.kind === 'fireball') { this.playWorldSound(p.x,p.z,()=>this.audio.fireballExplode()); this.explode(p.x, p.z, 2.5, 0, false, COLORS.casterExplosion); }
+    else if(p.kind==='molotov')this.igniteFire(p.x,p.z);
     else this.explode(p.x, p.z, p.radius, p.damage, true);
   }
 
@@ -5803,6 +5909,7 @@ class Game {
 
   damageEnemy(e, amount, source, knockDir = null, hitPart = 'body') {
     if (!e.alive) return;
+    if(source==='fire'){e.hp-=amount;if(e.hp<=0)this.killEnemy(e,'fire');return;}
     amount = this.adjustEnemyDamageByType(e, amount, source, knockDir, hitPart);
     e.hp -= amount;
     if (source === 'headshot') this.showHeadshot();
@@ -5917,7 +6024,7 @@ class Game {
     if (!e.alive) return;
     e.alive = false;
     this.spawnEnemyDeathDebris(e);
-    this.playWorldSound(e.x,e.z,()=>this.audio.enemyDeath(e.type));
+    this.playWorldSound(e.x,e.z,()=>this.audio.enemyDeath(e.type,e.personalitySeed || e.id));
     if (e.mesh?.parent) this.scene.remove(e.mesh);
     this.kills++;
     this.score += Math.round(e.score);
@@ -6347,7 +6454,7 @@ class Game {
       { id: 'stamina', icon: '⚡', category: '기동', maxStacks: 6, title: '스태미너 +15', desc: '달릴 수 있는 시간이 늘어난다.', apply: () => { this.player.maxStamina += 15; this.player.stamina = Math.min(this.player.maxStamina, this.player.stamina + 15); } },
       { id: 'speed', icon: '»', category: '기동', maxStacks: 6, title: '이동 속도 +4%', desc: '걷기와 달리기 속도가 조금 빨라진다.', apply: () => { this.upgrades.speed += .04; this.player.speed *= 1.04; this.player.sprint *= 1.04; } },
       { id: 'regen', icon: '↻', category: '기동', maxStacks: 5, title: '스태미너 회복 +20%', desc: '걷거나 멈춰 있는 동안의 스태미너 회복 속도가 더 빨라진다.', apply: () => { this.upgrades.staminaRegen += .20; this.player.staminaRegen *= 1.20; } },
-      { id: 'damage', icon: '✦', category: '화력', maxStacks: 8, title: '무기 데미지 +8%', desc: '총, 폭발, 레일건의 기본 화력이 오른다.', apply: () => { this.upgrades.damage *= 1.08; } },
+      { id: 'damage', icon: '✦', category: '화력', maxStacks: 8, title: '무기 데미지 +8%', desc: '총, 폭발, 레일건, 화염의 기본 화력이 오른다.', apply: () => { this.upgrades.damage *= 1.08; } },
       { id: 'headshot', icon: '◎', category: '정밀', maxStacks: 5, title: '헤드샷 데미지 +20%', desc: '머리를 맞혔을 때 보상이 커진다.', apply: () => { this.upgrades.headshot *= 1.20; } },
       { id: 'wallHp', icon: '▣', category: '방어', maxStacks: 5, title: '설치 벽 체력 +25%', desc: '앞으로 설치하는 벽이 더 오래 버틴다.', apply: () => { this.upgrades.wallHp *= 1.25; } },
       { id: 'ammo', icon: '▥', category: '보급', maxStacks: 4, title: '탄약 보급 +25%', desc: '상자에서 얻는 탄약량이 증가한다.', apply: () => { this.upgrades.ammoGain *= 1.25; } },
@@ -6394,6 +6501,7 @@ class Game {
 
   showRewardChoices() {
     this.serverRewardMode = false;
+    this.clearFirePatches();
     this.rewardOpen = true;
     this.prepPhase = false;
     this.prepTimer = 0;
@@ -6671,10 +6779,10 @@ class Game {
 
   resetLobby() { this.lobby={mode:'single',role:'solo',roomCode:'',ready:false,remoteReady:false,remoteSeen:false};this.setPlayMode('single'); }
   async copyInvite() {
-    const url=new URL(location.protocol==='file:' && this.net.serverUrl?this.net.serverUrl:location.href);url.searchParams.set('room',this.lobby.roomCode);
-    if(['localhost','127.0.0.1','[::1]'].includes(url.hostname)){this.showToast('다른 기기 초대: PC의 LAN IP 또는 공개 서버 주소로 접속한 뒤 링크를 복사하세요.');return;}
-    try{await navigator.clipboard.writeText(url.href);this.showToast('초대 링크 복사 완료');}
-    catch{if(UI.roomCodeInput){UI.roomCodeInput.value=this.lobby.roomCode;UI.roomCodeInput.focus();UI.roomCodeInput.select();}this.showToast('방 코드 '+this.lobby.roomCode+'를 친구에게 알려주세요.');}
+    const url=this.net.inviteUrl(this.lobby.roomCode);
+    if(UI.inviteLink){UI.inviteLink.hidden=false;UI.inviteLink.value=url;}
+    try{await navigator.clipboard.writeText(url);this.showToast('초대 링크 복사 완료 · LAN 주소는 같은 네트워크에서 사용하세요.');}
+    catch{UI.inviteLink?.focus();UI.inviteLink?.select();this.showToast('아래 초대 링크를 복사해 친구에게 보내세요.');}
   }
   setConnectionBlocked(blocked,title='',copy='') {
     const wasBlocked=this.connectionBlocked;this.connectionBlocked=!!blocked;

@@ -1,4 +1,5 @@
 // Standalone procedural audio: no downloads or sound-file dependencies.
+import {creaturePCM} from './creature-voices.js';
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const rand = (lo, hi) => lo + Math.random() * (hi - lo);
 
@@ -37,6 +38,7 @@ export class AudioBus {
     this.voices = new Map();
     this.timers = new Set();
     this.noiseCache = new Map();
+    this.creatureCache=new Map();
     this.listener = {x: 0, z: 0, yaw: 0};
     this.spatial = null;
     this.environment = 'box';
@@ -433,24 +435,25 @@ export class AudioBus {
 
   shoot(kind) {
     const dest = this.weaponDestination();
+    if(kind==='molotov'){this.noise(.16,.048,'bandpass',950,dest);this.defer(()=>this.noise(.09,.025,'highpass',2700,dest),45);return;}
     const pitch = rand(.982, 1.018);
     const heavy = ['shotgun','rocket','railgun'].includes(kind);
     this.duckMusic(heavy ? .34 : .58, heavy ? .15 : .07, heavy ? .34 : .20);
     const map = {
-      pistol: [330,.060,'square',.078,125], smg: [505,.036,'square',.052,165], shotgun: [142,.13,'sawtooth',.150,48],
-      rocket: [78,.22,'sawtooth',.135,28], railgun: [820,.12,'triangle',.110,310], grenade: [165,.08,'triangle',.072,70],
+      pistol: [132,.085,'sine',.090,46], smg: [155,.052,'sine',.075,62], shotgun: [83,.19,'sine',.155,31],
+      rocket: [78,.22,'sine',.135,28], railgun: [820,.12,'triangle',.110,310], grenade: [165,.08,'triangle',.072,70],
       barrel: [112,.06,'square',.060,60], wall: [205,.055,'triangle',.052,115]
     };
     const base = [...(map[kind] || map.pistol)];
     base[0] *= pitch; if (base[4]) base[4] *= pitch;
     this.beep(...base, dest);
     if (kind === 'pistol') {
-      this.noise(.052,.074,'bandpass',1850,dest);
+      this.noise(.028,.12,'highpass',2350,dest);this.noise(.095,.074,'bandpass',1350,dest);
       this.defer(() => this.beep(920*rand(.98,1.02),.026,'triangle',.022,540,dest),18);
       this.defer(() => this.noise(.075,.022,'lowpass',420,dest),30);
       this.beep(90,.085,'sine',.046,45,dest);
     } else if (kind === 'smg') {
-      this.noise(.038,.052,'bandpass',2100,dest);
+      this.noise(.023,.082,'highpass',2700,dest);this.noise(.055,.058,'bandpass',1750,dest);
       if (Math.random() < .42) this.defer(() => this.beep(1080,.018,'triangle',.014,620,dest),12);
     } else if (kind === 'shotgun') {
       this.noise(.115,.155,'lowpass',760,dest);
@@ -511,10 +514,20 @@ export class AudioBus {
     this.noise(type === 'devil' || type === 'tank' ? .085 : .05, gain, 'lowpass', freq, this.enemyDestination());
     if(type==='tank'||type==='devil')this.beep(65,.12,'sine',.027,38,this.enemyDestination());
   }
-  enemyAttack(type = 'zombie') {
-    const heavy = type === 'devil' || type === 'tank' || type === 'shield';
-    this.noise(type === 'devil' ? .14 : .09, heavy ? .046 : .030, 'bandpass', type === 'devil' ? 320 : (type === 'tank' ? 240 : 620),this.enemyDestination());
-    this.beep(heavy?95:155,.18,'sawtooth',.016,heavy?45:75,this.enemyDestination());
+  enemyVoice(type='zombie',mood='idle',seed=1) {
+    if(!this.enabled || !this.ctx)return;
+    const key=type+':'+mood;
+    let buffer=this.creatureCache.get(key);
+    if(!buffer){const pcm=creaturePCM(type,mood);buffer=this.ctx.createBuffer(1,pcm.length,24000);buffer.getChannelData(0).set(pcm);this.creatureCache.set(key,buffer);}
+    const src=this.ctx.createBufferSource(),g=this.ctx.createGain();src.buffer=buffer;
+    if(src.playbackRate)src.playbackRate.value=.90+((Number(seed)*13%97+97)%97)/97*.22;
+    g.gain.value=mood==='idle'?.085:mood==='death'?.12:.15;
+    src.connect(g);const route=this.route(g,this.enemyDestination());this.track(src,[g,...route]);src.start();
+    if(type==='shield' && mood!=='idle')this.noise(.11,.024,'bandpass',1600,this.enemyDestination());
+  }
+  enemyAttack(type = 'zombie',seed=1) {
+    this.enemyVoice(type,'attack',seed);
+    this.noise(.08,.027,'bandpass',type==='tank'?260:720,this.enemyDestination());
   }
   devilCast() { const d=this.enemyDestination();this.beep(160,.42,'sawtooth',.026,650,d);this.beep(171,.40,'sine',.018,675,d);this.noise(.22,.03,'bandpass',1100,d);this.duckMusic(.4,.3,.3); }
   fireballExplode() { this.noise(.10, .045, 'lowpass', 360); this.beep(58, .12, 'sawtooth', .035, 32); }
@@ -522,7 +535,9 @@ export class AudioBus {
   placeMine() { this.beep(125, .045, 'triangle', .017, 85); this.beep(380, .035, 'triangle', .012, 240); }
   wallCrack() { this.noise(.06, .030, 'highpass', 900); }
   wallBreak() { this.noise(.16, .055, 'lowpass', 460); this.beep(75, .14, 'sawtooth', .040, 38); }
-  enemyDeath(type = 'zombie') { this.noise(.13, type === 'devil' ? .055 : .040, 'lowpass', type === 'devil' ? 320 : 520); this.beep(type === 'devil' ? 92 : 130, .09, 'sawtooth', .026, 48); }
+  enemyDeath(type = 'zombie',seed=1) {this.enemyVoice(type,'death',seed);this.noise(.16,.04,'lowpass',type==='tank'?190:480,this.enemyDestination());}
+  molotovBreak() {const d=this.impactDestination();this.noise(.07,.09,'highpass',3800,d);this.noise(.24,.055,'bandpass',2300,d);this.defer(()=>this.noise(.35,.07,'lowpass',650,d),35);this.duckMusic(.55,.15,.3);}
+  fireCrackle() {const d=this.enemyDestination();this.noise(.40,.035,'bandpass',650,d);this.noise(.021,.028,'highpass',2500,d);if(Math.random()<.45)this.defer(()=>this.noise(.018,.022,'highpass',3200,d),90);}
   explosion() {
     const d=this.impactDestination();this.duckMusic(.25,.22,.45);
     this.noise(.26,.095,'lowpass',540,d);this.noise(.075,.055,'highpass',1600,d);

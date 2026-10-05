@@ -1118,3 +1118,12 @@ button:disabled { opacity:.38; cursor:default; filter:none; box-shadow:none; }
 .sound-panel .sound-hint { margin-bottom: 0; font-size: 12px; color: #a1b6b1; }
 @media (max-width: 520px) { .sound-sliders { grid-template-columns: 1fr; } .sound-actions { grid-template-columns: 1fr; } }
 @media (max-height: 500px) { .sound-sliders { margin: 12px 0; gap: 8px; } .sound-sliders label { padding: 10px; } .sound-panel h2 { font-size: 28px; } }
+
+/* 1.2 connection and creature audio controls */
+.server-connect,.creature-audition{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px;margin:8px 0 12px;}
+.server-connect label,.creature-audition label{display:grid;gap:7px;color:#d4e3dc;font-size:12px;}
+.server-connect input,.invite-link{width:100%;min-width:0;padding:11px;border:1px solid #82b9a866;border-radius:4px;background:#0c1718;color:#edf6ec;font:inherit;}
+.connection-help,.connection-guide{font-size:12px;line-height:1.65;color:#b5cbc2;overflow-wrap:anywhere;}
+.connection-guide summary{cursor:pointer;color:#dcebdd;}.connection-guide p{margin:10px 0;}.invite-link{margin-bottom:10px;font-size:12px;}
+.creature-audition select{width:100%;min-width:0;}.weapon-slot[data-weapon="molotov"].unlocked{border-color:#ff8c3eaa;}
+@media(max-width:520px){.server-connect,.creature-audition{grid-template-columns:1fr;}}

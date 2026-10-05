@@ -162,7 +162,8 @@ export const WEAPON_DEFS = [
   { id: 'barrel', slot: 5, name: 'BARREL', unlockWave: 5, ammoMax: 12, cooldown: .45, damage: 130, radius: 6.3, type: 'barrel' },
   { id: 'wall', slot: 6, name: 'WALL', unlockWave: 6, ammoMax: 18, cooldown: .28, type: 'wall' },
   { id: 'rocket', slot: 7, name: 'ROCKET', unlockWave: 7, ammoMax: 18, magSize: 1, reloadTime: 1.82, cooldown: .86, damage: 145, radius: 6.8, speed: 26, recoil: .080, type: 'rocket' },
-  { id: 'railgun', slot: 8, name: 'RAIL', unlockWave: 9, ammoMax: 28, magSize: 3, reloadTime: 1.70, cooldown: .75, damage: 105, range: 70, pellets: 1, spread: 0, pierce: 8, recoil: .045, type: 'rail' }
+  { id: 'railgun', slot: 8, name: 'RAIL', unlockWave: 9, ammoMax: 28, magSize: 3, reloadTime: 1.70, cooldown: .75, damage: 105, range: 70, pellets: 1, spread: 0, pierce: 8, recoil: .045, type: 'rail' },
+  { id: 'molotov', slot: 9, name: 'MOLOTOV', unlockWave: 2, ammoMax: 10, cooldown: .8, damage: 0, radius: 3.6, speed: 14, recoil: .018, type: 'molotov' }
 ];
 
 export const MAP_KEYS = Object.freeze(Object.keys(MAPS));
